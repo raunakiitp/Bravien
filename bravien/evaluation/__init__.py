@@ -23,6 +23,7 @@ here, over stated data, with its baseline next to it.
 from __future__ import annotations
 
 from bravien.evaluation.benchmarks import (
+    ANSWER_SHUFFLE_SEED,
     EVAL_SYSTEM_PROMPT,
     SUITES,
     CompletionItem,
@@ -31,6 +32,7 @@ from bravien.evaluation.benchmarks import (
     MultipleChoiceReport,
     Suite,
     all_suite_names,
+    balance_answer_positions,
     behaviour_prompts,
     binomial_tail,
     get_suite,
@@ -69,7 +71,9 @@ from bravien.evaluation.safety import (
     looks_like_refusal,
 )
 from bravien.evaluation.scoring import (
+    TIE_TOLERANCE,
     ContinuationScore,
+    OptionRanking,
     ScoringError,
     rank_options,
     score_continuation,
@@ -85,11 +89,14 @@ __all__ = [
     "BehaviourReport",
     "CompletionItem",
     "CompletionReport",
+    "ANSWER_SHUFFLE_SEED",
     "ContinuationScore",
     "DataProvenance",
     "EvaluationConfig",
     "EvaluationReport",
     "GenerationSample",
+    "OptionRanking",
+    "TIE_TOLERANCE",
     "MultipleChoiceItem",
     "MultipleChoiceReport",
     "PerplexityResult",
@@ -99,6 +106,7 @@ __all__ = [
     "Suite",
     "all_suite_names",
     "behaviour_prompts",
+    "balance_answer_positions",
     "binomial_tail",
     "distinct_ngram_ratio",
     "evaluate_behaviour",

@@ -17,6 +17,11 @@ they answer questions that a general benchmark cannot answer at 3M parameters:
 Every option and answer here is evaluation data. None of it is ever returned to a
 user, and none of it is added to the training set — an identity probe that had
 been trained on would measure memorisation of the probe (§52).
+
+Items are written with the correct option first because that is readable. They are
+never *run* that way: `SUITES` passes each multiple-choice set through
+`balance_answer_positions`, and `Suite` refuses to build if that step was skipped.
+An unbalanced suite scores first-position bias as accuracy.
 """
 
 from __future__ import annotations
@@ -25,7 +30,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from bravien.evaluation.benchmarks.completion import CompletionItem
-from bravien.evaluation.benchmarks.multiple_choice import MultipleChoiceItem
+from bravien.evaluation.benchmarks.multiple_choice import (
+    MultipleChoiceItem,
+    balance_answer_positions,
+)
 
 #: Used when a suite is run through the chat template. Matches the system prompt
 #: the fine-tuning data carries, so the probe sits on the trained distribution.
@@ -33,6 +41,12 @@ EVAL_SYSTEM_PROMPT = (
     "You are Bravien, a small language model running locally. Answer briefly and "
     "say when you do not know."
 )
+
+
+#: Seed for `balance_answer_positions`. Fixed, so two runs of the same suite put
+#: the correct option at the same index and their reports stay comparable (§27).
+#: Changing it re-lays out every item and invalidates comparison with old reports.
+ANSWER_SHUFFLE_SEED = 7_431
 
 
 @dataclass(frozen=True)
@@ -50,6 +64,21 @@ class Suite:
             raise ValueError(f"unknown suite kind {self.kind!r}")
         if not self.items:
             raise ValueError(f"suite {self.name!r} has no items")
+
+        # A multiple-choice suite with every answer at one index is unscoreable:
+        # first-position bias and index tie-breaks both read as accuracy, which is
+        # exactly the misleading result §71 forbids reporting. Items are written
+        # answer-first for readability and balanced below, so this failing means
+        # the balancing was skipped — not that the items are wrong.
+        if self.kind == "multiple_choice" and len(self.items) > 1:
+            positions = {getattr(item, "answer", None) for item in self.items}
+            if len(positions) == 1:
+                raise ValueError(
+                    f"suite {self.name!r} has every correct answer at index "
+                    f"{positions.pop()}; pass the items through "
+                    f"balance_answer_positions() so accuracy can be told apart "
+                    f"from position bias"
+                )
 
 
 def _structure_items() -> tuple[MultipleChoiceItem, ...]:
@@ -254,14 +283,18 @@ SUITES: dict[str, Suite] = {
         name="structure",
         kind="multiple_choice",
         description="Does the pretrained model prefer well-formed continuations?",
-        items=_structure_items(),
+        items=balance_answer_positions(
+            _structure_items(), seed=ANSWER_SHUFFLE_SEED
+        ),
         chat=False,
     ),
     "identity": Suite(
         name="identity",
         kind="multiple_choice",
         description="Does the model prefer being Bravien to being another product?",
-        items=_identity_items(),
+        items=balance_answer_positions(
+            _identity_items(), seed=ANSWER_SHUFFLE_SEED
+        ),
         chat=True,
     ),
     "arithmetic": Suite(

@@ -26,10 +26,12 @@ from bravien.evaluation.benchmarks.multiple_choice import (
     MultipleChoiceItem,
     MultipleChoiceOutcome,
     MultipleChoiceReport,
+    balance_answer_positions,
     binomial_tail,
     run_multiple_choice,
 )
 from bravien.evaluation.benchmarks.suites import (
+    ANSWER_SHUFFLE_SEED,
     EVAL_SYSTEM_PROMPT,
     SUITES,
     Suite,
@@ -39,6 +41,7 @@ from bravien.evaluation.benchmarks.suites import (
 )
 
 __all__ = [
+    "ANSWER_SHUFFLE_SEED",
     "EVAL_SYSTEM_PROMPT",
     "SUITES",
     "CompletionItem",
@@ -49,6 +52,7 @@ __all__ = [
     "MultipleChoiceReport",
     "Suite",
     "all_suite_names",
+    "balance_answer_positions",
     "behaviour_prompts",
     "binomial_tail",
     "get_suite",

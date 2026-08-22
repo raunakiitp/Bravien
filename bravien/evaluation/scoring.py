@@ -18,6 +18,11 @@ option, so an unnormalised multiple-choice score measures answer length more tha
 answer quality. Both are reported; the benchmarks default to the per-token mean
 and say so in the report.
 
+**Ties are not answers.** `rank_options` reports every index sharing the top
+score instead of resolving to one. Breaking a tie by index silently credits the
+tie-break rule to the model, and if a suite happens to keep its correct option at
+a fixed position that reads as accuracy (§71).
+
 Scoring never samples, so nothing in this module depends on a seed (§27).
 """
 
@@ -130,14 +135,63 @@ def score_options(
     return [score_continuation(engine, prefix, option) for option in options]
 
 
+#: Log-probability difference below which two options count as tied.
+#:
+#: Small enough to mean "the same number, up to float32 accumulation noise"
+#: rather than "close": a genuinely close call is a real preference and belongs
+#: in the margin, not in the tie count. A uniform model scores every option at
+#: exactly -log(vocab_size), so the pathological case lands well inside this.
+TIE_TOLERANCE = 1e-9
+
+
+@dataclass(frozen=True)
+class OptionRanking:
+    """Which option won, and whether anything actually won.
+
+    `tied` holds every index within `TIE_TOLERANCE` of the top score. When it has
+    more than one entry the model expressed no preference, and `best` is only the
+    first of them — crediting it as an answer would be scoring the tie-break rule
+    rather than the model (§71).
+    """
+
+    best: int
+    scores: list[ContinuationScore]
+    tied: tuple[int, ...]
+    normalised: bool = True
+
+    @property
+    def decided(self) -> bool:
+        """Whether exactly one option came out on top."""
+        return len(self.tied) == 1
+
+    @property
+    def margin(self) -> float:
+        """Gap between the best and second-best score. Zero when tied."""
+        key = (
+            (lambda s: s.mean_logprob)
+            if self.normalised
+            else (lambda s: s.logprob)
+        )
+        ranked = sorted((key(s) for s in self.scores), reverse=True)
+        if len(ranked) < 2:
+            return 0.0
+        return ranked[0] - ranked[1]
+
+
 def rank_options(
     engine: InferenceEngine,
     prefix: str,
     options: Sequence[str],
     *,
     normalise: bool = True,
-) -> tuple[int, list[ContinuationScore]]:
-    """The index of the highest-scoring option, and every score.
+) -> OptionRanking:
+    """Rank the options, reporting ties rather than silently breaking them.
+
+    `max()` over the scores would return the lowest tied index, which is not a
+    neutral default: a suite whose correct option always sits at index 0 would
+    then score a tie as a correct answer, and a model with no preference at all
+    would post perfect accuracy. `OptionRanking.tied` carries every index sharing
+    the top score so the caller can decline to credit an undecided item.
 
     Args:
         normalise: rank by per-token mean rather than by sum. Default True; a
@@ -145,5 +199,11 @@ def rank_options(
     """
     scores = score_options(engine, prefix, options)
     key = (lambda s: s.mean_logprob) if normalise else (lambda s: s.logprob)
-    best = max(range(len(scores)), key=lambda i: key(scores[i]))
-    return best, scores
+    values = [key(score) for score in scores]
+
+    top = max(values)
+    tied = tuple(i for i, v in enumerate(values) if top - v <= TIE_TOLERANCE)
+
+    return OptionRanking(
+        best=tied[0], scores=scores, tied=tied, normalised=normalise
+    )
