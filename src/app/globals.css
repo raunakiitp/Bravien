@@ -1,26 +1,221 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "highlight.js/styles/github-dark.css";
+@import "katex/dist/katex.min.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: var(--font-bravien-sans);
+  --font-display: var(--font-bravien-display);
+  --font-mono: var(--font-bravien-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Bravien brand: cool teal on soft slate — original, not purple/cream */
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.99 0.005 210);
+  --foreground: oklch(0.2 0.02 240);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.02 240);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.02 240);
+  --primary: oklch(0.42 0.09 210);
+  --primary-foreground: oklch(0.99 0.01 210);
+  --secondary: oklch(0.95 0.01 210);
+  --secondary-foreground: oklch(0.28 0.03 240);
+  --muted: oklch(0.96 0.008 210);
+  --muted-foreground: oklch(0.5 0.02 240);
+  --accent: oklch(0.94 0.02 195);
+  --accent-foreground: oklch(0.28 0.04 210);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --border: oklch(0.9 0.01 210);
+  --input: oklch(0.9 0.01 210);
+  --ring: oklch(0.55 0.1 210);
+  --brand: oklch(0.48 0.11 195);
+  --brand-foreground: oklch(0.99 0.01 195);
+  --brand-muted: oklch(0.93 0.03 195);
+  --chart-1: oklch(0.55 0.12 195);
+  --chart-2: oklch(0.6 0.1 160);
+  --chart-3: oklch(0.45 0.08 240);
+  --chart-4: oklch(0.7 0.1 80);
+  --chart-5: oklch(0.65 0.12 40);
+  --sidebar: oklch(0.975 0.008 210);
+  --sidebar-foreground: oklch(0.25 0.02 240);
+  --sidebar-primary: oklch(0.42 0.09 210);
+  --sidebar-primary-foreground: oklch(0.99 0.01 210);
+  --sidebar-accent: oklch(0.94 0.02 195);
+  --sidebar-accent-foreground: oklch(0.28 0.04 210);
+  --sidebar-border: oklch(0.9 0.01 210);
+  --sidebar-ring: oklch(0.55 0.1 210);
+}
+
+.dark {
+  --background: oklch(0.16 0.02 240);
+  --foreground: oklch(0.95 0.01 210);
+  --card: oklch(0.2 0.025 240);
+  --card-foreground: oklch(0.95 0.01 210);
+  --popover: oklch(0.2 0.025 240);
+  --popover-foreground: oklch(0.95 0.01 210);
+  --primary: oklch(0.72 0.1 195);
+  --primary-foreground: oklch(0.18 0.03 240);
+  --secondary: oklch(0.26 0.03 240);
+  --secondary-foreground: oklch(0.95 0.01 210);
+  --muted: oklch(0.24 0.025 240);
+  --muted-foreground: oklch(0.7 0.02 210);
+  --accent: oklch(0.28 0.04 200);
+  --accent-foreground: oklch(0.95 0.01 210);
+  --destructive: oklch(0.65 0.18 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.65 0.1 195);
+  --brand: oklch(0.7 0.11 195);
+  --brand-foreground: oklch(0.16 0.02 240);
+  --brand-muted: oklch(0.28 0.05 200);
+  --chart-1: oklch(0.7 0.12 195);
+  --chart-2: oklch(0.7 0.1 160);
+  --chart-3: oklch(0.65 0.08 240);
+  --chart-4: oklch(0.75 0.1 80);
+  --chart-5: oklch(0.7 0.12 40);
+  --sidebar: oklch(0.14 0.02 240);
+  --sidebar-foreground: oklch(0.95 0.01 210);
+  --sidebar-primary: oklch(0.72 0.1 195);
+  --sidebar-primary-foreground: oklch(0.16 0.02 240);
+  --sidebar-accent: oklch(0.24 0.04 200);
+  --sidebar-accent-foreground: oklch(0.95 0.01 210);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.65 0.1 195);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  html {
+    scroll-behavior: smooth;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Chat markdown */
+.prose-bravien {
+  @apply text-[15px] leading-7 text-foreground;
+}
+.prose-bravien h1,
+.prose-bravien h2,
+.prose-bravien h3 {
+  @apply font-display font-semibold tracking-tight mt-6 mb-2;
+}
+.prose-bravien h1 {
+  @apply text-2xl;
+}
+.prose-bravien h2 {
+  @apply text-xl;
+}
+.prose-bravien h3 {
+  @apply text-lg;
+}
+.prose-bravien p {
+  @apply my-3;
+}
+.prose-bravien ul {
+  @apply my-3 list-disc pl-6;
+}
+.prose-bravien ol {
+  @apply my-3 list-decimal pl-6;
+}
+.prose-bravien li {
+  @apply my-1;
+}
+.prose-bravien a {
+  @apply text-brand underline underline-offset-2;
+}
+.prose-bravien blockquote {
+  @apply border-l-2 border-brand/40 pl-4 italic text-muted-foreground my-3;
+}
+.prose-bravien table {
+  @apply w-full my-4 text-sm border-collapse;
+}
+.prose-bravien th,
+.prose-bravien td {
+  @apply border border-border px-3 py-2 text-left;
+}
+.prose-bravien th {
+  @apply bg-muted font-medium;
+}
+.prose-bravien code:not(pre code) {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+}
+.prose-bravien pre {
+  @apply my-4 overflow-x-auto rounded-xl border border-border bg-[#0d1117] p-4 text-sm;
+}
+.prose-bravien pre code {
+  @apply bg-transparent p-0 text-[#e6edf3];
+}
+
+@keyframes bravien-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.streaming-cursor::after {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--brand);
+  animation: bravien-pulse 1s ease-in-out infinite;
 }
