@@ -10,6 +10,7 @@
  */
 
 import type {
+  AIMessage,
   AIModel,
   AIStreamChunk,
   CompleteTextParams,
@@ -231,6 +232,76 @@ export function toAIModel(info: RuntimeModelInfo): AIModel {
     maxOutputTokens: Math.max(1, Math.floor(info.context_length / 2)),
     isDefault: true,
   };
+}
+
+/**
+ * The runtime's own accounting for a prompt (§Phase 7).
+ *
+ * Every field is a real token count from the checkpoint's tokenizer. This is what
+ * the UI displays; nothing here is estimated on the web side.
+ */
+export interface RuntimeContextPlan {
+  input_tokens: number;
+  max_context_tokens: number;
+  reserved_output_tokens: number;
+  available_tokens: number;
+  overhead_tokens: number;
+  truncated: boolean;
+  truncated_turns: number;
+  system_truncated: boolean;
+  latest_user_truncated: boolean;
+}
+
+export interface RuntimeTokenCount {
+  tokens: number;
+  characters: number;
+  max_context_tokens: number;
+  fits_context: boolean;
+  characters_per_token: number;
+  token_ids?: number[];
+  context?: RuntimeContextPlan;
+}
+
+/**
+ * Exact token counts from the runtime's tokenizer.
+ *
+ * The only correct way for the web side to learn a token count: the tokenizer is
+ * a property of the checkpoint, so any local approximation drifts the moment the
+ * checkpoint changes. Costs a loopback round trip, which is the right price for a
+ * number the user is shown.
+ */
+export async function countRuntimeTokens(params: {
+  text?: string;
+  messages?: AIMessage[];
+  maxTokens?: number;
+  signal?: AbortSignal;
+}): Promise<RuntimeTokenCount> {
+  const response = await runtimeFetch(
+    "/v1/tokenize",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(params.text !== undefined ? { text: params.text } : {}),
+        ...(params.messages !== undefined
+          ? {
+              messages: params.messages.map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+            }
+          : {}),
+        ...(typeof params.maxTokens === "number"
+          ? { max_tokens: params.maxTokens }
+          : {}),
+      }),
+      signal: params.signal,
+    },
+    HEALTH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) await throwForStatus(response);
+  return (await response.json()) as RuntimeTokenCount;
 }
 
 interface SamplingBody {

@@ -62,6 +62,30 @@ export type AIStreamChunk =
       kind: "message_complete";
       finishReason?: string;
       usage?: { inputTokens?: number; outputTokens?: number };
+      /**
+       * The runtime's context accounting for this turn, measured with the real
+       * tokenizer (§Phase 7). Present whenever the turn went through the chat
+       * endpoint. `truncated` here is authoritative — the web side does not
+       * compute it.
+       */
+      context?: {
+        input_tokens: number;
+        max_context_tokens: number;
+        reserved_output_tokens: number;
+        available_tokens: number;
+        overhead_tokens: number;
+        truncated: boolean;
+        truncated_turns: number;
+        system_truncated: boolean;
+        latest_user_truncated: boolean;
+      };
+      /** Set only when a raw prompt had to be cut without message structure. */
+      promptTruncation?: {
+        truncated: boolean;
+        prompt_tokens_before: number;
+        prompt_tokens_after: number;
+        dropped_tokens: number;
+      };
     }
   | { kind: "error"; code: string; message: string };
 

@@ -28,6 +28,11 @@ from typing import Any
 
 import torch
 
+from bravien.inference.context import (
+    ContextOverflowError,
+    ContextPlan,
+    plan_context,
+)
 from bravien.model.generation import GenerationConfig, generate
 from bravien.model.model import BravienForCausalLM
 from bravien.tokenizer.special_tokens import ASSISTANT_CLOSE, EOS
@@ -110,6 +115,8 @@ class GenerationResult:
     finish_reason: str
     seconds: float
     model: str = ""
+    #: Context accounting when this came from a conversation. Empty for a raw prompt.
+    context: dict[str, Any] = field(default_factory=dict)
 
     @property
     def tokens_per_second(self) -> float:
@@ -125,6 +132,7 @@ class GenerationResult:
             "seconds": round(self.seconds, 4),
             "tokens_per_second": round(self.tokens_per_second, 2),
             "model": self.model,
+            **({"context": self.context} if self.context else {}),
         }
 
 
@@ -234,6 +242,9 @@ class InferenceEngine:
         self.loaded_at = time.time()
         self._generations = 0
         self._completion_tokens = 0
+        #: Set by `_encode_prompt` when a raw prompt had to be cut, so the cut is
+        #: reportable instead of living only in a log line.
+        self._last_truncation: dict[str, Any] | None = None
 
         logger.info(
             "engine ready: %s, %s params, %s on %s, stop ids %s",
@@ -423,12 +434,25 @@ class InferenceEngine:
                 f"{self.max_context}-token context, leaving no room for a prompt"
             )
         if len(ids) > room:
-            # Keep the tail: in a conversation the most recent turns matter most,
-            # and truncating the front is visible to the caller in the response.
+            # A raw prompt string has no message structure to truncate
+            # intelligently, so the tail is kept — the most recent text matters
+            # most. Callers with a conversation should use `plan_chat` instead,
+            # which drops whole turns and keeps the system prompt.
+            #
+            # Recorded rather than only logged: a silent cut here is how a
+            # request loses most of its prompt without anyone noticing.
+            self._last_truncation = {
+                "truncated": True,
+                "prompt_tokens_before": len(ids),
+                "prompt_tokens_after": room,
+                "dropped_tokens": len(ids) - room,
+            }
             logger.warning(
                 "prompt of %d tokens truncated to the last %d", len(ids), room
             )
             ids = ids[-room:]
+        else:
+            self._last_truncation = None
 
         return torch.tensor([ids], dtype=torch.long, device=self.device)
 
@@ -518,6 +542,11 @@ class InferenceEngine:
                 ),
                 "text": final_text,
                 "token_ids": list(produced),
+                **(
+                    {"prompt_truncation": self._last_truncation}
+                    if self._last_truncation
+                    else {}
+                ),
             },
         )
 
@@ -570,13 +599,64 @@ class InferenceEngine:
                 raise EngineError("each message needs a role and content")
         return self.tokenizer.apply_chat_template(messages)
 
+    def plan_chat(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        max_new_tokens: int | None = None,
+    ) -> ContextPlan:
+        """Decide which messages fit, counted with this checkpoint's tokenizer.
+
+        This is the honest answer to "will this conversation fit", and it is
+        message-aware: whole turns are dropped oldest-first while the system
+        prompt and the newest question are preserved. Compare `_encode_prompt`,
+        which can only cut a raw string blindly.
+
+        `max_new_tokens` is what the caller intends to generate and is reserved
+        out of the context window before any message is admitted.
+        """
+        if not messages:
+            raise EngineError("messages must not be empty")
+        reserved = (
+            self.config.default_generation.max_new_tokens
+            if max_new_tokens is None
+            else max_new_tokens
+        )
+        reserved = max(1, min(int(reserved), self.config.max_new_tokens_limit))
+        try:
+            return plan_context(
+                self.tokenizer,
+                messages,
+                max_context=self.max_context,
+                reserved_output=reserved,
+            )
+        except ContextOverflowError as exc:
+            raise PromptTooLongError(str(exc)) from exc
+
+    def build_chat_prompt_within_context(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        max_new_tokens: int | None = None,
+    ) -> tuple[str, ContextPlan]:
+        """The prompt string that fits, plus the accounting for what it cost."""
+        plan = self.plan_chat(messages, max_new_tokens=max_new_tokens)
+        return self.tokenizer.apply_chat_template(list(plan.messages)), plan
+
     def stream_chat(
         self,
         messages: Sequence[dict[str, Any]],
         *,
         generation: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        return self.stream(self.build_chat_prompt(messages), generation=generation)
+        config = self._merge_config(generation)
+        prompt, plan = self.build_chat_prompt_within_context(
+            messages, max_new_tokens=config.max_new_tokens
+        )
+        for event in self.stream(prompt, generation=generation):
+            if event.done:
+                event.usage["context"] = plan.to_dict()
+            yield event
 
     def chat(
         self,
@@ -584,10 +664,76 @@ class InferenceEngine:
         *,
         generation: dict[str, Any] | None = None,
     ) -> GenerationResult:
-        return self.complete(self.build_chat_prompt(messages), generation=generation)
+        config = self._merge_config(generation)
+        prompt, plan = self.build_chat_prompt_within_context(
+            messages, max_new_tokens=config.max_new_tokens
+        )
+        result = self.complete(prompt, generation=generation)
+        result.context = plan.to_dict()
+        return result
+
+    # -------------------------------------------------------------- tokenization
+
+    def count_tokens(
+        self,
+        *,
+        text: str | None = None,
+        messages: Sequence[dict[str, Any]] | None = None,
+        include_ids: bool = False,
+        max_new_tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Token counts from the checkpoint's own tokenizer.
+
+        Exists so a caller never has to estimate. A client that guesses at
+        characters-per-token will be wrong by whatever the corpus makes that ratio,
+        and being wrong in the optimistic direction silently truncates prompts.
+
+        Exactly one of `text` or `messages` is required. With `messages` the count
+        is for the full templated prompt including role markers and the generation
+        cue, and a `context` block reports whether it fits.
+        """
+        if (text is None) == (messages is None):
+            raise EngineError("provide exactly one of text or messages")
+
+        if text is not None:
+            if not isinstance(text, str):
+                raise EngineError("text must be a string")
+            if len(text) > MAX_PROMPT_CHARS:
+                raise PromptTooLongError(
+                    f"text is {len(text):,} characters, over the "
+                    f"{MAX_PROMPT_CHARS:,} character limit"
+                )
+            ids = self.tokenizer.encode(text, add_special_tokens=False)
+            payload: dict[str, Any] = {
+                "tokens": len(ids),
+                "characters": len(text),
+                "max_context_tokens": self.max_context,
+                "fits_context": len(ids) <= self.max_context,
+            }
+            if len(ids):
+                payload["characters_per_token"] = round(len(text) / len(ids), 4)
+            if include_ids:
+                payload["token_ids"] = ids
+            return payload
+
+        assert messages is not None
+        plan = self.plan_chat(messages, max_new_tokens=max_new_tokens)
+        prompt = self.tokenizer.apply_chat_template(list(plan.messages))
+        ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        payload = {
+            "tokens": len(ids),
+            "characters": len(prompt),
+            "max_context_tokens": self.max_context,
+            "fits_context": len(ids) <= self.max_context,
+            "context": plan.to_dict(),
+        }
+        if len(ids):
+            payload["characters_per_token"] = round(len(prompt) / len(ids), 4)
+        if include_ids:
+            payload["token_ids"] = ids
+        return payload
 
     # ------------------------------------------------------------------ scoring
-
     @torch.inference_mode()
     def logprob(self, text: str) -> dict[str, float]:
         """Mean token log-probability of `text` under the model.

@@ -6,9 +6,9 @@
  * errors and never rendered as assistant text (§52).
  */
 
-import { trimConversationHistory } from "@/lib/ai/context";
+import { boundHistoryForPayload } from "@/lib/ai/context";
 import { getDefaultModelId, getModel } from "@/lib/ai/models";
-import { buildSystemPrompt } from "@/lib/ai/prompts";
+import { buildSystemPromptDetailed } from "@/lib/ai/prompts";
 import { getProviderForModel, ModelUnavailableError } from "@/lib/ai/providers";
 import type { AIMessage, AIStreamChunk, StreamTextParams } from "@/types";
 
@@ -22,7 +22,10 @@ export interface StreamChatOptions {
   userPreferences?: string | null;
   memories?: string[];
   modelInstructions?: string | null;
-  /** Approximate context budget before trimming older turns */
+  /**
+   * Overrides the payload guard's allowance. Not a context budget — the runtime
+   * owns that and reports it back on `message_complete`.
+   */
   maxContextTokens?: number;
 }
 
@@ -74,28 +77,39 @@ export async function* streamChat(
     return;
   }
 
-  const system = buildSystemPrompt({
+  // The system prompt is sized to this model's real context window. The full
+  // prompt is 817 tokens, which does not fit `bravien-tiny`'s 512-token window at
+  // all, so a small checkpoint gets a smaller prompt rather than a truncated one.
+  const { prompt: system, tier, droppedExtras } = buildSystemPromptDetailed({
     userPreferences: options.userPreferences,
     memories: options.memories,
     modelInstructions: options.modelInstructions,
+    contextWindow: model.contextWindow,
   });
+
+  if (droppedExtras.length > 0) {
+    console.warn(
+      `[bravien] ${model.id} (${model.contextWindow}-token context, "${tier}" prompt tier) ` +
+        `has no room for: ${droppedExtras.join(", ")}`,
+    );
+  }
 
   const withoutSystem = options.messages.filter((m) => m.role !== "system");
 
-  // Reserve room for the answer inside the model's real context window. Small
-  // checkpoints have small windows, so the old 4k floor would overflow them.
-  const budget =
-    options.maxContextTokens ?? Math.floor(model.contextWindow * 0.6);
-
-  const trimmed = trimConversationHistory(
+  // A payload guard, not a context budget. The runtime owns the budget: it has
+  // the tokenizer, it drops whole turns oldest-first, it keeps the system prompt,
+  // and it reports the result on the `message_complete` frame. Trimming to a
+  // character estimate here is what previously cut prompts to a third of their
+  // size and took the system message with them.
+  const bounded = boundHistoryForPayload(
     [{ role: "system", content: system }, ...withoutSystem],
-    budget,
+    options.maxContextTokens ?? model.contextWindow,
   );
 
   try {
     yield* provider.streamText({
       model: model.providerModelId,
-      messages: trimmed,
+      messages: bounded,
       tools: options.tools,
       signal: options.signal,
       maxTokens: model.maxOutputTokens,

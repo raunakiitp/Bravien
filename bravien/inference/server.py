@@ -40,6 +40,7 @@ from bravien.inference.engine import (
     PromptTooLongError,
 )
 from bravien.model.generation import GenerationConfig
+from bravien.tokenizer.templates import ChatTemplateError
 from bravien.utils.logging import get_logger
 
 logger = get_logger("inference.server")
@@ -129,6 +130,33 @@ class ChatRequest(SamplingParams):
 
 class ScoreRequest(_Strict):
     text: str = Field(min_length=1, max_length=200_000)
+
+
+class TokenizeRequest(_Strict):
+    """Count tokens with the served checkpoint's own tokenizer.
+
+    Exists so no client has to estimate. Exactly one of `text` or `messages`.
+    """
+
+    text: str | None = Field(default=None, max_length=200_000)
+    messages: list[ChatMessage] | None = Field(default=None, max_length=200)
+    #: Return the ids as well as the count. Off by default: the ids are large
+    #: and most callers only need the length.
+    include_ids: bool = False
+    #: Output reservation used when reporting whether `messages` fits.
+    max_tokens: int | None = Field(default=None, ge=1, le=8192)
+
+    @field_validator("messages")
+    @classmethod
+    def _total_size(cls, value: list[ChatMessage] | None) -> list[ChatMessage] | None:
+        if value is None:
+            return None
+        total = sum(len(m.content) for m in value)
+        if total > 200_000:
+            raise ValueError(
+                f"messages total {total:,} characters, over the 200,000 limit"
+            )
+        return value
 
 
 # ---------------------------------------------------------------- middleware
@@ -245,11 +273,17 @@ def _stream_body(
     prompt: str,
     generation: dict[str, Any],
     stop_strings: list[str],
+    *,
+    context: dict[str, Any] | None = None,
 ) -> Iterator[str]:
     """SSE frames for one generation.
 
     A synchronous generator on purpose: Starlette iterates it in a worker thread,
     so the blocking forward passes never occupy the event loop.
+
+    `context` is the budgeting plan from the chat path. It rides on
+    `message_complete` so the client can show what was actually sent to the model
+    and what had to be dropped to fit.
     """
     try:
         for event in engine.stream(
@@ -258,6 +292,7 @@ def _stream_body(
             if event.done:
                 usage = dict(event.usage)
                 usage.pop("text", None)
+                plan = context if context is not None else usage.get("context")
                 yield _sse(
                     {
                         "kind": "message_complete",
@@ -271,6 +306,12 @@ def _stream_body(
                             "tokensPerSecond": usage.get("tokens_per_second"),
                         },
                         "model": engine.model_name,
+                        **({"context": plan} if plan else {}),
+                        **(
+                            {"promptTruncation": usage["prompt_truncation"]}
+                            if usage.get("prompt_truncation")
+                            else {}
+                        ),
                     }
                 )
             else:
@@ -413,20 +454,47 @@ def create_app(
     def chat_completions(request: ChatRequest) -> Any:
         engine = state.require()
         messages = [m.model_dump() for m in request.messages]
+        generation = request.to_generation()
+        stops = list(request.stop or [])
+
+        # Budget against the real tokenizer before anything is generated. This
+        # drops whole turns oldest-first and keeps the system prompt, rather than
+        # letting `_encode_prompt` cut the encoded string blindly, and the plan is
+        # returned to the caller so a truncation is never invisible.
         try:
-            prompt = engine.build_chat_prompt(messages)
+            reserved = (
+                request.max_tokens
+                if request.max_tokens is not None
+                else engine.config.default_generation.max_new_tokens
+            )
+            prompt, plan = engine.build_chat_prompt_within_context(
+                messages, max_new_tokens=reserved
+            )
+        except ChatTemplateError as exc:
+            # A conversation the template cannot render — an unknown role, or a
+            # final assistant turn with nothing to answer. That is bad client
+            # input, not a server fault, so it must not surface as a 500.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_conversation", "message": str(exc)},
+            ) from exc
+        except PromptTooLongError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "prompt_too_long", "message": str(exc)},
+            ) from exc
         except EngineError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "invalid_request", "message": str(exc)},
             ) from exc
 
-        generation = request.to_generation()
-        stops = list(request.stop or [])
         state.acquire()
         if request.stream:
             return StreamingResponse(
-                _stream_body(state, engine, prompt, generation, stops),
+                _stream_body(
+                    state, engine, prompt, generation, stops, context=plan.to_dict()
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -448,7 +516,39 @@ def create_app(
             "object": "chat.completion",
             "message": {"role": "assistant", "content": result.text},
             **result.to_dict(),
+            "context": plan.to_dict(),
         }
+
+    @app.post("/v1/tokenize")
+    def tokenize(request: TokenizeRequest) -> dict[str, Any]:
+        """Exact token counts, so callers never estimate characters-per-token."""
+        engine = state.require()
+        try:
+            return engine.count_tokens(
+                text=request.text,
+                messages=(
+                    [m.model_dump() for m in request.messages]
+                    if request.messages is not None
+                    else None
+                ),
+                include_ids=request.include_ids,
+                max_new_tokens=request.max_tokens,
+            )
+        except ChatTemplateError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_conversation", "message": str(exc)},
+            ) from exc
+        except PromptTooLongError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "prompt_too_long", "message": str(exc)},
+            ) from exc
+        except EngineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_request", "message": str(exc)},
+            ) from exc
 
     @app.post("/v1/score")
     def score(request: ScoreRequest) -> dict[str, Any]:

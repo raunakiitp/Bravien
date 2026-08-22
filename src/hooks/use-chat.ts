@@ -44,6 +44,22 @@ export interface UiMessage {
   model?: string;
   finishReason?: string;
   usage?: { inputTokens?: number; outputTokens?: number };
+  /**
+   * The runtime's context accounting for this turn, measured with the real
+   * tokenizer. Shown so a truncated conversation is visible to the user rather
+   * than only present in a server log (§Phase 7).
+   */
+  context?: {
+    input_tokens: number;
+    max_context_tokens: number;
+    reserved_output_tokens: number;
+    available_tokens: number;
+    overhead_tokens: number;
+    truncated: boolean;
+    truncated_turns: number;
+    system_truncated: boolean;
+    latest_user_truncated: boolean;
+  };
   /** Text pulled out of attached documents, sent with the message but shown apart. */
   attachments?: Array<{ name: string; characters: number }>;
   createdAt: number;
@@ -256,6 +272,7 @@ export function useChat(options: UseChatOptions = {}) {
                 status: "done",
                 finishReason: frame.finishReason,
                 usage: frame.usage,
+                context: frame.context,
               });
               break;
             }
@@ -315,7 +332,7 @@ export function useChat(options: UseChatOptions = {}) {
           status: "failed",
           error: failure,
         });
-      } else if (!sawComplete && received.length === 0) {
+      } else if (received.length === 0) {
         patch(placeholderId, {
           status: "failed",
           error: {

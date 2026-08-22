@@ -184,6 +184,44 @@ function TurnError({
   );
 }
 
+/**
+ * Says out loud when the conversation did not fit the model's context.
+ *
+ * The runtime counts the prompt with the real tokenizer and reports exactly what
+ * it had to drop. Showing that is the difference between "the model ignored my
+ * earlier message" and "the model never received my earlier message" — the user
+ * can act on the second and is only confused by the first. Nothing here is
+ * computed in the browser; every number comes from the runtime.
+ */
+function ContextNotice({ context }: { context: UiMessage["context"] }) {
+  if (!context?.truncated) return null;
+
+  const reasons: string[] = [];
+  if (context.truncated_turns > 0) {
+    reasons.push(
+      `${context.truncated_turns} earlier ${
+        context.truncated_turns === 1 ? "message was" : "messages were"
+      } left out`,
+    );
+  }
+  if (context.latest_user_truncated) reasons.push("your message was shortened");
+  if (context.system_truncated) reasons.push("Bravien's instructions were shortened");
+
+  return (
+    <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+      <AlertTriangle className="mt-px size-3 shrink-0" aria-hidden />
+      <span>
+        {reasons.join("; ")} to fit this checkpoint&rsquo;s{" "}
+        {context.max_context_tokens.toLocaleString()}-token context.{" "}
+        {context.input_tokens.toLocaleString()} of{" "}
+        {context.available_tokens.toLocaleString()} available tokens were used,
+        with {context.reserved_output_tokens.toLocaleString()} reserved for the
+        answer.
+      </span>
+    </p>
+  );
+}
+
 function AssistantTurn({
   message,
   onRegenerate,
@@ -243,6 +281,8 @@ function AssistantTurn({
               <TurnError error={message.error} onRetry={onRegenerate} />
             </div>
           )}
+
+          <ContextNotice context={message.context} />
         </>
       )}
 
@@ -277,6 +317,9 @@ function AssistantTurn({
             {message.usage?.outputTokens != null && (
               <span className="ml-1 font-mono text-[10px] text-muted-foreground">
                 {message.usage.outputTokens} tok
+                {message.context
+                  ? ` · ${message.context.input_tokens}/${message.context.max_context_tokens} ctx`
+                  : ""}
                 {message.finishReason && message.finishReason !== "stop"
                   ? ` · ${message.finishReason}`
                   : ""}
