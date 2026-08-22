@@ -2,13 +2,20 @@
 
 export type AIModelCapability = "text" | "vision" | "tools" | "reasoning";
 
+/**
+ * Bravien has exactly one inference backend: the local runtime serving a Bravien
+ * checkpoint. No hosted model service may appear here — a Bravien response comes
+ * from Bravien's own weights or it does not exist (§2, §76).
+ */
+export type AIProviderId = "bravien-local";
+
 export interface AIModel {
   id: string;
   name: string;
   description: string;
-  /** Upstream provider model identifier (e.g. gpt-4o-mini) */
+  /** Model name as the local runtime reports it. */
   providerModelId: string;
-  provider: "openai-compatible" | "anthropic";
+  provider: AIProviderId;
   capabilities: AIModelCapability[];
   contextWindow: number;
   maxOutputTokens?: number;
@@ -87,6 +94,30 @@ export interface AIProvider {
   streamText(params: StreamTextParams): AsyncIterable<AIStreamChunk>;
   completeText?(params: CompleteTextParams): Promise<string>;
 }
+
+/**
+ * Frames sent by `/api/chat` over SSE.
+ *
+ * Model output travels only in `content_delta`. The extra kinds carry
+ * bookkeeping — which conversation this became, whether it was saved — so the
+ * client never has to infer state from the text, and text never has to carry
+ * anything but what the model produced (§52).
+ */
+export type ChatStreamFrame =
+  | AIStreamChunk
+  | {
+      kind: "meta";
+      conversationId: string | null;
+      model: string;
+      persisted: boolean;
+      title?: string;
+    }
+  | {
+      kind: "saved";
+      userMessageId: string | null;
+      assistantMessageId: string | null;
+    };
+
 
 export interface ConversationDTO {
   id: string;

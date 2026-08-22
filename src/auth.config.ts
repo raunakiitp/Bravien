@@ -1,5 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 
+import { authRequired, needsAccount } from "@/lib/auth/policy";
+
 /**
  * Edge-compatible Auth.js config (no Prisma / Node-only imports).
  * Used by middleware/proxy; full providers live in `auth.ts`.
@@ -14,22 +16,11 @@ export const authConfig = {
   },
   callbacks: {
     authorized({ auth, request }) {
-      const { pathname } = request.nextUrl;
-      const isLoggedIn = !!auth?.user;
-
-      const isProtected =
-        pathname.startsWith("/chat") ||
-        pathname.startsWith("/settings") ||
-        pathname.startsWith("/api/conversations") ||
-        pathname.startsWith("/api/chat") ||
-        pathname.startsWith("/api/files") ||
-        pathname.startsWith("/api/memories");
-
-      if (isProtected) {
-        return isLoggedIn;
-      }
-
-      return true;
+      // Without configured accounts there is nobody to be, and redirecting to a
+      // sign-in page would strand the owner outside their own runtime.
+      if (!authRequired()) return true;
+      if (!needsAccount(request.nextUrl.pathname)) return true;
+      return Boolean(auth?.user);
     },
   },
 } satisfies NextAuthConfig;

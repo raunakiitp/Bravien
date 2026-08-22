@@ -49,3 +49,18 @@ next-env.d.ts
 # local uploads
 /uploads
 /uploads/**
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# trained weights and prepared data — large and regenerable from scripts/.
+# tokenizers/ is deliberately tracked: every checkpoint pins its checksum,
+# so inference cannot run against a differently-trained vocabulary.
+/checkpoints/
+/datasets/
+
+# generated evaluation output
+/reports/

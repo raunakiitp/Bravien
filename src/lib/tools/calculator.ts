@@ -29,7 +29,8 @@ export function evaluateArithmetic(expression: string): number {
     throw new Error("Identifiers are not allowed");
   }
 
-  // eslint-disable-next-line no-new-func -- intentional: expression already character-whitelisted
+  // Intentional: the expression was already reduced to a digit/operator
+  // whitelist above, and identifiers were rejected, so nothing callable remains.
   const fn = new Function(`"use strict"; return (${cleaned});`);
   const result = fn();
   if (typeof result !== "number" || !Number.isFinite(result)) {

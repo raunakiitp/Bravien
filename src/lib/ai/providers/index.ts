@@ -1,5 +1,16 @@
-import { getModel } from "@/lib/ai/models";
-import { OpenAICompatibleProvider } from "@/lib/ai/providers/openai-compatible";
+/**
+ * Provider resolution.
+ *
+ * There is exactly one provider: the local Bravien runtime. This file exists to
+ * turn "the runtime is not running" or "that checkpoint is not loaded" into a
+ * clear error, not to choose between backends.
+ *
+ * A hosted model service must never appear here. If Bravien cannot answer from
+ * its own weights, the honest outcome is an error the user can act on (§2, §76).
+ */
+
+import { getModel, getRuntimeStatus } from "@/lib/ai/models";
+import { BravienLocalProvider } from "@/lib/ai/providers/bravien-local";
 import type { AIProvider } from "@/types";
 
 export class ModelUnavailableError extends Error {
@@ -11,46 +22,48 @@ export class ModelUnavailableError extends Error {
   }
 }
 
+/** One client instance is enough — it holds no per-request state. */
+const provider = new BravienLocalProvider();
+
 /**
- * Resolve a provider for a Bravien model id.
- * Currently OpenAI-compatible (OPENAI_API_KEY + OPENAI_BASE_URL).
- * Anthropic can be wired later when ANTHROPIC_API_KEY is set and a provider is implemented.
+ * Resolve the provider for a model id, verifying the runtime is actually serving
+ * that model first. Checking here means a chat turn fails before streaming
+ * starts, rather than half-way through an answer.
  */
-export function getProviderForModel(modelId: string): AIProvider {
-  const model = getModel(modelId);
-  if (!model) {
-    throw new ModelUnavailableError(`Unknown model: ${modelId}`);
-  }
+export async function getProviderForModel(
+  modelId: string,
+): Promise<AIProvider> {
+  const model = await getModel(modelId);
+  if (model) return provider;
 
-  if (model.provider === "anthropic") {
-    const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
-    if (!anthropicKey) {
-      throw new ModelUnavailableError(
-        "MODEL_UNAVAILABLE: Anthropic provider is not configured (missing ANTHROPIC_API_KEY)",
-      );
-    }
-    // Native Anthropic Messages API provider not implemented yet; fall through guidance.
+  const health = await getRuntimeStatus();
+
+  if (health.status === "unreachable") {
     throw new ModelUnavailableError(
-      "MODEL_UNAVAILABLE: Anthropic provider is configured for future use but not yet implemented. Use an openai-compatible model.",
+      `The Bravien runtime is not running. Start it with \`python scripts/serve.py\` ` +
+        `and reload. (${health.error ?? "no response"})`,
     );
   }
-
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
+  if (!health.modelLoaded) {
     throw new ModelUnavailableError(
-      "MODEL_UNAVAILABLE: Missing OPENAI_API_KEY. Configure an OpenAI-compatible API key to use Bravien models.",
+      `The Bravien runtime is running but has no checkpoint loaded` +
+        `${health.error ? `: ${health.error}` : "."} ` +
+        `Train one with \`python scripts/pretrain.py\` or point BRAVIEN_CHECKPOINT at an existing checkpoint.`,
     );
   }
-
-  const baseUrl =
-    process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
-
-  return new OpenAICompatibleProvider({
-    apiKey,
-    baseUrl,
-    id: "openai-compatible",
-  });
+  throw new ModelUnavailableError(
+    `The runtime is serving ${health.model ? `"${health.model}"` : "a different model"}, not "${modelId}".`,
+  );
 }
 
-export { OpenAICompatibleProvider } from "@/lib/ai/providers/openai-compatible";
+/** The provider, with no model check. For callers that already resolved a model. */
+export function getLocalProvider(): AIProvider {
+  return provider;
+}
+
+export { BravienLocalProvider } from "@/lib/ai/providers/bravien-local";
+export {
+  RuntimeRequestError,
+  RuntimeUnavailableError,
+} from "@/lib/ai/providers/bravien-local";
 export type { AIProvider } from "@/types";

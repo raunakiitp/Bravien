@@ -1,17 +1,24 @@
 import { getConfig } from "@/lib/config";
 
+/**
+ * File types Bravien can actually read.
+ *
+ * The list is deliberately short: it contains exactly the formats
+ * `parseFile` extracts text from today. Images are absent because this
+ * architecture has no vision tower — accepting a PNG would store bytes the model
+ * can never see. PDF and DOCX are absent because no extractor is wired yet.
+ * Rejecting them with a clear message beats accepting them and attaching nothing
+ * (§72).
+ */
 export const ALLOWED_MIME_TYPES = new Set([
   "text/plain",
   "text/markdown",
   "text/csv",
   "application/json",
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
 ]);
+
+/** Extensions matching the allowlist, for a friendlier error message. */
+export const ALLOWED_EXTENSIONS = [".txt", ".md", ".csv", ".json"];
 
 export interface FileValidationResult {
   ok: boolean;
@@ -30,7 +37,9 @@ export function validateUpload(file: {
     return {
       ok: false,
       code: "UNSUPPORTED_MIME",
-      error: `Unsupported file type: ${file.mimeType || "unknown"}`,
+      error:
+        `Bravien cannot read ${file.mimeType || "that file type"}. ` +
+        `Supported: ${ALLOWED_EXTENSIONS.join(", ")}.`,
     };
   }
 
@@ -42,11 +51,15 @@ export function validateUpload(file: {
     };
   }
 
+  if (file.size === 0) {
+    return { ok: false, code: "EMPTY_FILE", error: "File is empty." };
+  }
+
   if (file.size > maxUploadBytes) {
     return {
       ok: false,
       code: "FILE_TOO_LARGE",
-      error: `File exceeds maximum size of ${maxUploadBytes} bytes`,
+      error: `File exceeds the maximum size of ${Math.floor(maxUploadBytes / 1024 / 1024)} MB.`,
     };
   }
 

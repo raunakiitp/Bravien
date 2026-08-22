@@ -10,15 +10,15 @@ const envSchema = z.object({
   AUTH_SECRET: z.string().optional(),
   AUTH_URL: z.string().optional(),
 
-  OPENAI_API_KEY: z.string().optional(),
-  OPENAI_BASE_URL: z.string().optional(),
-  ANTHROPIC_API_KEY: z.string().optional(),
-
-  BRAVIEN_MODEL_FAST: z.string().optional(),
-  BRAVIEN_MODEL_BALANCED: z.string().optional(),
-  BRAVIEN_MODEL_REASONING: z.string().optional(),
-  BRAVIEN_MODEL_VISION: z.string().optional(),
+  /**
+   * Bravien's inference backend. There are no model-service API keys here by
+   * design: responses come from a local Bravien checkpoint served by
+   * `bravien.inference.server`, or they do not come at all (§2, §76).
+   */
+  BRAVIEN_RUNTIME_URL: z.string().optional(),
+  BRAVIEN_RUNTIME_TIMEOUT_MS: z.string().optional(),
   BRAVIEN_DEFAULT_MODEL: z.string().optional(),
+  BRAVIEN_MODEL_TITLES: z.string().optional(),
 
   SEARCH_API_KEY: z.string().optional(),
 
@@ -40,7 +40,7 @@ const envSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {
-  openaiBaseUrl: string;
+  runtimeUrl: string;
   uploadDir: string;
   maxUploadBytes: number;
 };
@@ -57,7 +57,9 @@ export function getConfig(): AppConfig {
 
   cached = {
     ...data,
-    openaiBaseUrl: data.OPENAI_BASE_URL || "https://api.openai.com/v1",
+    runtimeUrl: (
+      data.BRAVIEN_RUNTIME_URL || "http://127.0.0.1:8000"
+    ).replace(/\/+$/, ""),
     uploadDir: data.UPLOAD_DIR || "uploads",
     maxUploadBytes: Number.isFinite(maxUploadBytes)
       ? maxUploadBytes

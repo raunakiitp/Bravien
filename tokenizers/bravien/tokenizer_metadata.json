@@ -1,0 +1,36 @@
+{
+  "name": "bravien-tokenizer",
+  "version": "0.1.0",
+  "algorithm": "byte-level BPE",
+  "requested_vocab_size": 2048,
+  "actual_vocab_size": 1021,
+  "min_frequency": 2,
+  "special_tokens": [
+    "<PAD>",
+    "<UNK>",
+    "<BOS>",
+    "<EOS>",
+    "<SYSTEM>",
+    "</SYSTEM>",
+    "<USER>",
+    "</USER>",
+    "<ASSISTANT>",
+    "</ASSISTANT>",
+    "<TOOL>",
+    "</TOOL>"
+  ],
+  "corpus": {
+    "documents": 1500,
+    "characters": 1890677,
+    "bytes": 1890677
+  },
+  "train_seconds": 0.103,
+  "sources": [
+    {
+      "origin": "synthetic-seed-corpus",
+      "synthetic": true
+    }
+  ],
+  "vocab_checksum": "sha256:ae3babf84f66ea39ec10292ba9a4e58f",
+  "roundtrip_probes_passed": 7
+}
