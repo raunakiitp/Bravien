@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=512,
+        default=256,
         help="Default response length when a request does not specify one.",
     )
     parser.add_argument("--temperature", type=float, default=0.8)
