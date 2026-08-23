@@ -32,16 +32,23 @@ DTYPE_NAMES = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Serve a Bravien checkpoint over a local HTTP API.",
+        description="Serve a Bravien checkpoint or pretrained model over a local HTTP API.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--checkpoint",
         default=None,
         help=(
-            "Checkpoint directory, or a run directory whose latest checkpoint should "
-            "be used. Falls back to $BRAVIEN_CHECKPOINT, then checkpoints/bravien."
+            "Checkpoint directory, run directory, or model repo ID (e.g. HuggingFaceTB/SmolLM-135M-Instruct). "
+            "Falls back to $BRAVIEN_CHECKPOINT, $BRAVIEN_MODEL, then checkpoints/bravien."
         ),
+    )
+    parser.add_argument(
+        "--model",
+        "--hf-model",
+        dest="model",
+        default=None,
+        help="Pretrained Hugging Face model identifier (e.g. HuggingFaceTB/SmolLM-135M-Instruct or Qwen/Qwen2.5-0.5B-Instruct).",
     )
     parser.add_argument(
         "--host",
@@ -70,10 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=512,
+        default=256,
         help="Default response length when a request does not specify one.",
     )
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument(
@@ -95,29 +102,26 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging(level=args.log_level.upper())
 
-    # Imported after logging is configured so torch's own noise is captured, and
-    # after argument parsing so `--help` does not pay for loading torch.
     from bravien.inference.engine import EngineConfig
     from bravien.inference.server import resolve_checkpoint_path, serve
     from bravien.model.generation import GenerationConfig
 
-    checkpoint = resolve_checkpoint_path(args.checkpoint)
-    if not checkpoint.exists():
+    target = args.model or args.checkpoint
+    checkpoint = resolve_checkpoint_path(target)
+
+    # If it's a local path and doesn't exist, check fallback
+    if isinstance(checkpoint, Path) and not checkpoint.exists() and not args.model:
+        default_hf = "HuggingFaceTB/SmolLM-135M-Instruct"
         print(
-            f"No checkpoint at {checkpoint}\n\n"
-            "Train one first:\n"
-            "  python scripts/train_tokenizer.py\n"
-            "  python scripts/prepare_data.py\n"
-            "  python scripts/pretrain.py\n\n"
-            "Or point at an existing one with --checkpoint / $BRAVIEN_CHECKPOINT.",
+            f"Note: Local checkpoint not found at {checkpoint}.\n"
+            f"Loading smart pretrained open weights: {default_hf}...\n",
             file=sys.stderr,
         )
-        return 2
+        checkpoint = default_hf
 
     engine_config = EngineConfig(
-        checkpoint=checkpoint,
+        checkpoint=checkpoint if isinstance(checkpoint, Path) else None,
         device=args.device,
-        # The scripts speak torch's dtype names; the engine uses short ones.
         dtype=DTYPE_NAMES[args.dtype],
         default_generation=GenerationConfig(
             max_new_tokens=args.max_new_tokens,

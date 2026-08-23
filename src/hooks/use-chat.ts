@@ -67,6 +67,7 @@ export interface UiMessage {
 
 export interface UseChatOptions {
   conversationId?: string | null;
+  projectId?: string | null;
   initialMessages?: MessageDTO[];
   modelId?: string | null;
   /** Called with the id the server assigned when a new conversation is saved. */
@@ -141,14 +142,16 @@ export function useChat(options: UseChatOptions = {}) {
       .map(fromDto)
       .filter((m): m is UiMessage => m !== null),
   );
+  const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(
     options.conversationId ?? null,
   );
-  const [busy, setBusy] = useState(false);
-  const [persisted, setPersisted] = useState<boolean | null>(null);
   const [model, setModel] = useState<string | null>(options.modelId ?? null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   // Latest-value refs, synced after commit rather than written during render.
   // Every reader is an event handler or async continuation, so "the last
@@ -158,11 +161,6 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
-
-  const optionsRef = useRef(options);
-  useEffect(() => {
-    optionsRef.current = options;
-  });
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -208,6 +206,9 @@ export function useChat(options: UseChatOptions = {}) {
               ? { modelId: optionsRef.current.modelId }
               : {}),
             ...(conversationId ? { conversationId } : {}),
+            ...(optionsRef.current.projectId
+              ? { projectId: optionsRef.current.projectId }
+              : {}),
             ...(opts.clientMessageId
               ? { clientMessageId: opts.clientMessageId }
               : {}),

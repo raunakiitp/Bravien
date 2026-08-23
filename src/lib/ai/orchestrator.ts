@@ -6,9 +6,8 @@
  * errors and never rendered as assistant text (§52).
  */
 
-import { boundHistoryForPayload } from "@/lib/ai/context";
+import { buildContext } from "@/lib/ai/context";
 import { getDefaultModelId, getModel } from "@/lib/ai/models";
-import { buildSystemPromptDetailed } from "@/lib/ai/prompts";
 import { getProviderForModel, ModelUnavailableError } from "@/lib/ai/providers";
 import type { AIMessage, AIStreamChunk, StreamTextParams } from "@/types";
 
@@ -20,12 +19,15 @@ export interface StreamChatOptions {
   tools?: StreamTextTools;
   signal?: AbortSignal;
   userPreferences?: string | null;
+  projectInstructions?: string | null;
+  projectDocumentsContext?: string | null;
+  toolResultsFormatted?: string | null;
+  evidenceFormatted?: string | null;
+  planSummary?: string | null;
+  conversationSummary?: string | null;
+  isCodingMode?: boolean;
   memories?: string[];
   modelInstructions?: string | null;
-  /**
-   * Overrides the payload guard's allowance. Not a context budget — the runtime
-   * owns that and reports it back on `message_complete`.
-   */
   maxContextTokens?: number;
 }
 
@@ -36,7 +38,7 @@ export interface GenerateTitleOptions {
 }
 
 /**
- * Orchestrates a chat turn: system prompt, context trim, provider stream.
+ * Orchestrates a chat turn: system prompt, context budgeting, tool injection, provider stream.
  * Yields SSE-friendly AIStreamChunk events.
  */
 export async function* streamChat(
@@ -67,8 +69,6 @@ export async function* streamChat(
   }
 
   if (!model) {
-    // getProviderForModel throws when the model is unknown, so this is
-    // unreachable; it keeps the type narrow without a non-null assertion.
     yield {
       kind: "error",
       code: "MODEL_UNAVAILABLE",
@@ -77,39 +77,29 @@ export async function* streamChat(
     return;
   }
 
-  // The system prompt is sized to this model's real context window. The full
-  // prompt is 817 tokens, which does not fit `bravien-tiny`'s 512-token window at
-  // all, so a small checkpoint gets a smaller prompt rather than a truncated one.
-  const { prompt: system, tier, droppedExtras } = buildSystemPromptDetailed({
+  const built = buildContext({
+    messages: options.messages.filter((m) => m.role !== "system"),
+    contextWindow: options.maxContextTokens ?? model.contextWindow,
     userPreferences: options.userPreferences,
+    projectInstructions: options.projectInstructions,
+    projectDocumentsContext: options.projectDocumentsContext,
+    toolResultsFormatted: options.toolResultsFormatted,
+    evidenceFormatted: options.evidenceFormatted,
+    planSummary: options.planSummary,
+    conversationSummary: options.conversationSummary,
+    isCodingMode: options.isCodingMode,
     memories: options.memories,
-    modelInstructions: options.modelInstructions,
-    contextWindow: model.contextWindow,
   });
 
-  if (droppedExtras.length > 0) {
-    console.warn(
-      `[bravien] ${model.id} (${model.contextWindow}-token context, "${tier}" prompt tier) ` +
-        `has no room for: ${droppedExtras.join(", ")}`,
-    );
-  }
-
-  const withoutSystem = options.messages.filter((m) => m.role !== "system");
-
-  // A payload guard, not a context budget. The runtime owns the budget: it has
-  // the tokenizer, it drops whole turns oldest-first, it keeps the system prompt,
-  // and it reports the result on the `message_complete` frame. Trimming to a
-  // character estimate here is what previously cut prompts to a third of their
-  // size and took the system message with them.
-  const bounded = boundHistoryForPayload(
-    [{ role: "system", content: system }, ...withoutSystem],
-    options.maxContextTokens ?? model.contextWindow,
-  );
+  const promptMessages: AIMessage[] = [
+    { role: "system", content: built.systemPrompt },
+    ...built.messages,
+  ];
 
   try {
     yield* provider.streamText({
       model: model.providerModelId,
-      messages: bounded,
+      messages: promptMessages,
       tools: options.tools,
       signal: options.signal,
       maxTokens: model.maxOutputTokens,

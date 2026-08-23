@@ -9,6 +9,7 @@
  * them. A switch that does nothing is worse than no switch (§72).
  */
 
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import {
@@ -154,6 +155,235 @@ function FlagRow({
   );
 }
 
+const MEMORY_CATEGORIES = [
+  "ALL",
+  "PREFERENCE",
+  "FACT",
+  "WORKFLOW",
+  "PROJECT",
+  "INSTRUCTION",
+  "PROFILE",
+  "EXPLICIT",
+] as const;
+
+function MemoryManagement() {
+  const [memories, setMemories] = useState<
+    Array<{
+      id: string;
+      type: string;
+      content: string;
+      projectId: string | null;
+      updatedAt: string;
+    }>
+  >([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const fetchMemories = useCallback(async () => {
+    try {
+      const res = await fetch("/api/memories");
+      if (res.ok) {
+        const data = await res.json();
+        setMemories(data.items || []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchMemories();
+  }, [fetchMemories]);
+
+  async function handleSaveEdit(id: string) {
+    if (!editContent.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/memories/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editContent.trim() }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setMemories((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, content: updated.content } : m)),
+        );
+        setEditingId(null);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setBusy(true);
+    try {
+      await fetch(`/api/memories/${id}`, { method: "DELETE" });
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleClearAll() {
+    if (!window.confirm("Clear all stored memories? This cannot be undone.")) return;
+    setBusy(true);
+    try {
+      await fetch("/api/memories", { method: "DELETE" });
+      setMemories([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const filtered = memories.filter((m) => {
+    const matchesCategory =
+      selectedCategory === "ALL" || m.type === selectedCategory;
+    const matchesQuery =
+      !filter.trim() ||
+      m.content.toLowerCase().includes(filter.trim().toLowerCase());
+    return matchesCategory && matchesQuery;
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            placeholder="Filter memories..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="h-8 w-56 rounded-lg border border-border bg-background px-2.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-2"
+          />
+          <div className="flex flex-wrap gap-1">
+            {MEMORY_CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setSelectedCategory(cat)}
+                className={cn(
+                  "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                  selectedCategory === cat
+                    ? "bg-brand text-brand-foreground"
+                    : "bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {memories.length > 0 && (
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            onClick={handleClearAll}
+            className="text-destructive hover:bg-destructive/10"
+          >
+            Clear all
+          </Button>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="h-16 animate-pulse rounded-xl bg-muted/40" />
+      ) : filtered.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border py-6 text-center text-xs text-muted-foreground">
+          {filter.trim() || selectedCategory !== "ALL"
+            ? "No matching memories in this category."
+            : "No memories stored yet."}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+          {filtered.map((m) => (
+            <li key={m.id} className="p-3 text-xs">
+              {editingId === m.id ? (
+                <div className="space-y-2">
+                  <textarea
+                    rows={2}
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-background p-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2"
+                  />
+                  <div className="flex justify-end gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={busy}
+                      onClick={() => setEditingId(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="xs"
+                      disabled={busy || !editContent.trim()}
+                      onClick={() => handleSaveEdit(m.id)}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0 pr-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-[10px] text-brand">
+                        {m.type}
+                      </span>
+                      {m.projectId && (
+                        <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">
+                          Project Scoped
+                        </span>
+                      )}
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(m.updatedAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="mt-1 font-medium text-foreground">{m.content}</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={busy}
+                      onClick={() => {
+                        setEditingId(m.id);
+                        setEditContent(m.content);
+                      }}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      disabled={busy}
+                      onClick={() => handleDelete(m.id)}
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { snapshot, loading, refresh } = useRuntime();
   const model = snapshot?.activeModel ?? null;
@@ -176,18 +406,16 @@ export default function SettingsPage() {
         </div>
 
         <h1 className="mt-6 font-display text-3xl font-semibold tracking-tight">
-          Settings
+          Settings & Identity
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          This install answers from a checkpoint on this machine. What Bravien can
-          do is set by that checkpoint and by your environment, so most of this
-          page reports rather than configures.
+          Bravien is a local, private AI assistant. Active models serve as runtime execution engines under the Bravien identity.
         </p>
 
         <div className="mt-8">
           <Section
-            title="Model"
-            description="Read from the running engine, not from configuration."
+            title="Assistant Identity & Model Engine"
+            description="Bravien identity with runtime engine metadata."
           >
             {model ? (
               <ModelCard model={model} />
@@ -204,6 +432,13 @@ export default function SettingsPage() {
             >
               Re-check the runtime
             </Button>
+          </Section>
+
+          <Section
+            title="Persistent Memories"
+            description="Cross-session preferences, project context, and facts retained by Bravien."
+          >
+            <MemoryManagement />
           </Section>
 
           <Section title="Appearance">
@@ -235,20 +470,14 @@ export default function SettingsPage() {
                   <>
                     <p className="font-medium">Saved to a database</p>
                     <p className="text-muted-foreground">
-                      Conversations and messages are written to the configured
-                      database and stay after a restart.
+                      Conversations, projects, files, and memories are written to PostgreSQL.
                     </p>
                   </>
                 ) : (
                   <>
                     <p className="font-medium">Nothing is being saved</p>
                     <p className="text-muted-foreground">
-                      No database is configured, so conversations live only in this
-                      tab and disappear when you reload. Chat works fine without
-                      one.
-                    </p>
-                    <p className="mt-2 font-mono text-xs break-all text-muted-foreground">
-                      set DATABASE_URL in .env, then: npm run db:push
+                      No database is configured, so conversations live only in this tab.
                     </p>
                   </>
                 )}

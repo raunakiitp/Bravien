@@ -22,6 +22,7 @@ function toConversationDTO(row: Conversation): ConversationDTO {
   return {
     id: row.id,
     userId: row.userId,
+    projectId: row.projectId ?? null,
     title: row.title,
     model: row.model,
     pinned: row.pinned,
@@ -52,6 +53,7 @@ function toMessageDTO(row: Message): MessageDTO {
 }
 
 export interface ListConversationsOptions {
+  projectId?: string | null;
   archived?: boolean;
   query?: string;
   take?: number;
@@ -67,6 +69,9 @@ export async function listConversations(
     userId,
     archived: options.archived ?? false,
   };
+  if (options.projectId !== undefined) {
+    where.projectId = options.projectId;
+  }
   if (options.query?.trim()) {
     where.title = { contains: options.query.trim(), mode: "insensitive" };
   }
@@ -115,12 +120,14 @@ export async function getConversationMessages(
 
 export async function createConversation(input: {
   userId: string;
+  projectId?: string | null;
   title: string;
   model: string;
 }): Promise<ConversationDTO> {
   const row = await prisma.conversation.create({
     data: {
       userId: input.userId,
+      projectId: input.projectId ?? null,
       title: input.title.slice(0, MAX_TITLE_LENGTH) || "New chat",
       model: input.model,
     },
@@ -132,6 +139,7 @@ export async function updateConversation(
   userId: string,
   id: string,
   patch: {
+    projectId?: string | null;
     title?: string;
     pinned?: boolean;
     archived?: boolean;
@@ -144,6 +152,7 @@ export async function updateConversation(
   const result = await prisma.conversation.updateMany({
     where: { id, userId },
     data: {
+      ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
       ...(patch.title !== undefined
         ? { title: patch.title.slice(0, MAX_TITLE_LENGTH) || "New chat" }
         : {}),
@@ -193,6 +202,27 @@ export async function touchConversation(id: string): Promise<void> {
   await prisma.conversation
     .update({ where: { id }, data: { updatedAt: new Date() } })
     .catch(() => undefined);
+}
+
+export async function deleteLastAssistantMessage(
+  userId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const owned = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    select: { id: true },
+  });
+  if (!owned) return false;
+
+  const lastMessage = await prisma.message.findFirst({
+    where: { conversationId, role: "assistant" },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!lastMessage) return false;
+
+  await prisma.message.delete({ where: { id: lastMessage.id } });
+  return true;
 }
 
 export async function setMessageFeedback(

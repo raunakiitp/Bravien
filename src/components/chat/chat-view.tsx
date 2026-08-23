@@ -34,6 +34,7 @@ export interface ChatViewProps {
   snapshot: RuntimeSnapshot | null;
   runtimeLoading: boolean;
   conversationId?: string | null;
+  projectId?: string | null;
   initialMessages?: MessageDTO[];
   onConversationCreated?: (id: string, title?: string) => void;
 }
@@ -42,6 +43,7 @@ export function ChatView({
   snapshot,
   runtimeLoading,
   conversationId = null,
+  projectId = null,
   initialMessages,
   onConversationCreated,
 }: ChatViewProps) {
@@ -49,6 +51,7 @@ export function ChatView({
 
   const chat = useChat({
     conversationId,
+    projectId,
     initialMessages,
     modelId: activeModelId,
     onConversationCreated,

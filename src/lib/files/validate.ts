@@ -15,15 +15,40 @@ export const ALLOWED_MIME_TYPES = new Set([
   "text/markdown",
   "text/csv",
   "application/json",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 /** Extensions matching the allowlist, for a friendlier error message. */
-export const ALLOWED_EXTENSIONS = [".txt", ".md", ".csv", ".json"];
+export const ALLOWED_EXTENSIONS = [".txt", ".md", ".csv", ".json", ".pdf", ".docx"];
 
 export interface FileValidationResult {
   ok: boolean;
   error?: string;
   code?: string;
+}
+
+export const MAX_FILENAME_LENGTH = 255;
+
+/**
+ * Sanitizes user-provided filenames to prevent path traversal and shell exploits.
+ */
+export function sanitizeFilename(raw: string): string {
+  if (!raw) return "file";
+  // Strip path traversal sequences and directory separators
+  const base = raw
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop() ?? "file";
+
+  // Remove null bytes, control characters, leading dots
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/^\.+/, "")
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .trim();
+
+  return (cleaned || "file").slice(0, MAX_FILENAME_LENGTH);
 }
 
 export function validateUpload(file: {
@@ -32,6 +57,20 @@ export function validateUpload(file: {
   filename?: string;
 }): FileValidationResult {
   const { maxUploadBytes } = getConfig();
+
+  if (file.filename) {
+    const clean = sanitizeFilename(file.filename);
+    const hasValidExt = ALLOWED_EXTENSIONS.some((ext) =>
+      clean.toLowerCase().endsWith(ext),
+    );
+    if (!hasValidExt) {
+      return {
+        ok: false,
+        code: "UNSUPPORTED_EXTENSION",
+        error: `File extension is not supported. Supported: ${ALLOWED_EXTENSIONS.join(", ")}.`,
+      };
+    }
+  }
 
   if (!file.mimeType || !ALLOWED_MIME_TYPES.has(file.mimeType)) {
     return {

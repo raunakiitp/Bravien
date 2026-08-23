@@ -54,6 +54,7 @@ const bodySchema = z
     messages: z.array(messageSchema).min(1).max(MAX_MESSAGES),
     modelId: z.string().min(1).max(200).optional(),
     conversationId: z.string().min(1).max(64).optional(),
+    projectId: z.string().min(1).max(64).optional().nullable(),
     /** Client-side id for the user message, echoed back so the UI can reconcile. */
     clientMessageId: z.string().min(1).max(64).optional(),
     /** Regenerating: do not persist the user message again. */
@@ -78,13 +79,18 @@ function rateLimitKey(request: Request, userId: string | null): string {
  * Best-effort: a failure here degrades personalisation, and losing the turn over
  * it would be worse than answering without it.
  */
-async function loadPersonalisation(userId: string): Promise<{
+async function loadPersonalisation(
+  userId: string,
+  projectId?: string | null,
+  query?: string,
+): Promise<{
   instructions: string | null;
+  projectInstructions: string | null;
   memories: string[];
 }> {
   try {
     const { prisma } = await import("@/lib/db/prisma");
-    const [user, memories] = await Promise.all([
+    const [user, project, memories] = await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
         select: {
@@ -93,8 +99,14 @@ async function loadPersonalisation(userId: string): Promise<{
           memoryEnabled: true,
         },
       }),
+      projectId
+        ? prisma.project.findFirst({
+            where: { id: projectId, userId },
+            select: { instructions: true },
+          })
+        : Promise.resolve(null),
       isFeatureEnabled("memory")
-        ? getMemoryContentsForPrompt(userId, 20)
+        ? getMemoryContentsForPrompt(userId, { projectId, query, take: 10 })
         : Promise.resolve([]),
     ]);
 
@@ -104,10 +116,11 @@ async function loadPersonalisation(userId: string): Promise<{
 
     return {
       instructions: parts.length ? parts.join("\n\n") : null,
+      projectInstructions: project?.instructions?.trim() || null,
       memories: user?.memoryEnabled === false ? [] : memories,
     };
   } catch {
-    return { instructions: null, memories: [] };
+    return { instructions: null, projectInstructions: null, memories: [] };
   }
 }
 
@@ -184,6 +197,7 @@ export async function POST(request: Request) {
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
 
   let conversationId: string | null = body.conversationId ?? null;
+  let activeProjectId: string | null = body.projectId ?? null;
   let conversationTitle: string | undefined;
   let userMessageId: string | null = null;
 
@@ -196,10 +210,14 @@ export async function POST(request: Request) {
           // conversation — that would hide a bug or an access attempt.
           return jsonError(404, "NOT_FOUND", "Conversation not found.");
         }
+        if (existing.projectId) {
+          activeProjectId = existing.projectId;
+        }
       } else {
         conversationTitle = await generateConversationTitle({ messages });
         const created = await createConversation({
           userId,
+          projectId: activeProjectId,
           title: conversationTitle,
           model: modelId,
         });
@@ -234,10 +252,151 @@ export async function POST(request: Request) {
   // runtime producing tokens nobody will read.
   request.signal.addEventListener("abort", () => abort.abort(), { once: true });
 
-  // Personalisation, only when there is a user and a database to read it from.
+  // Personalisation & project instructions (with query-based relevance scoring)
   const personalisation = canPersist && userId
-    ? await loadPersonalisation(userId)
-    : { instructions: null, memories: [] as string[] };
+    ? await loadPersonalisation(userId, activeProjectId, lastUser?.content)
+    : { instructions: null, projectInstructions: null, memories: [] as string[] };
+
+  // 1. Intent Routing
+  let intentResult: import("@/lib/ai/router").IntentResult = {
+    intent: "GENERAL_CHAT",
+    confidence: 1.0,
+    requiresPlanning: false,
+    requiresWeb: false,
+    candidateTools: [],
+    entities: {},
+    reasoning: "Default conversational turn",
+  };
+  if (lastUser?.content) {
+    try {
+      const { routeIntent } = await import("@/lib/ai/router");
+      intentResult = routeIntent(lastUser.content, {
+        hasActiveProject: Boolean(activeProjectId),
+        hasWebAccess: isFeatureEnabled("web_search"),
+      });
+    } catch {
+      // fallback to general chat
+    }
+  }
+
+  // 2. Task Planning (for complex / multi-step requests)
+  let planSummary: string | null = null;
+  const plannedEvidence: string[] = [];
+  if (intentResult.requiresPlanning && lastUser?.content) {
+    try {
+      const { createPlan, executePlan } = await import("@/lib/ai/planner");
+      const plan = createPlan(lastUser.content, intentResult, { projectId: activeProjectId });
+      const planExec = await executePlan(
+        plan,
+        {
+          userId: userId ?? "guest",
+          projectId: activeProjectId,
+          conversationId,
+        },
+        { timeoutMs: 10_000 },
+      );
+      planSummary = planExec.summaryText;
+      plannedEvidence.push(...planExec.evidenceTexts);
+    } catch (planErr) {
+      logger.warn("chat.planning_failed", {
+        error: planErr instanceof Error ? planErr.message : String(planErr),
+      });
+    }
+  }
+
+  // 3. Web Research Workflow
+  let webEvidenceFormatted: string | null = null;
+  const webCitationsList: Array<{ title: string; url: string; snippet: string }> = [];
+  if (
+    isFeatureEnabled("web_search") &&
+    (intentResult.requiresWeb || intentResult.intent === "WEB_RESEARCH") &&
+    lastUser?.content &&
+    !intentResult.requiresPlanning
+  ) {
+    try {
+      const { runResearchWorkflow } = await import("@/lib/ai/research");
+      const research = await runResearchWorkflow(lastUser.content, {
+        maxSearchResults: 3,
+        timeoutMs: 6000,
+      });
+      if (research.formattedEvidence) {
+        webEvidenceFormatted = research.formattedEvidence;
+        webCitationsList.push(...research.citations);
+      }
+    } catch (webErr) {
+      logger.warn("chat.web_research_failed", {
+        error: webErr instanceof Error ? webErr.message : String(webErr),
+      });
+    }
+  }
+
+  // 4. RAG document retrieval if conversation belongs to a project
+  let retrievedContext: string | null = null;
+  let retrievedChunksList: Array<{ filename: string; chunkIndex: number; content: string }> = [];
+  if (canPersist && userId && activeProjectId && lastUser?.content) {
+    try {
+      const { retrieveRelevantContext, formatRetrievedContext } = await import(
+        "@/lib/rag/retrieval"
+      );
+      const hits = await retrieveRelevantContext({
+        userId,
+        projectId: activeProjectId,
+        query: lastUser.content,
+        limit: 4,
+      });
+      if (hits.length > 0) {
+        retrievedContext = formatRetrievedContext(hits);
+        retrievedChunksList = hits.map((h) => ({
+          filename: h.filename,
+          chunkIndex: h.chunkIndex,
+          content: h.content,
+        }));
+      }
+    } catch (err) {
+      logger.error("rag.retrieve_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 5. Tool execution loop (for direct tool requests like math, time, explicit search)
+  let toolResultsFormatted: string | null = null;
+  if (lastUser?.content && !intentResult.requiresPlanning && !intentResult.requiresWeb) {
+    try {
+      const { runToolLoop } = await import("@/lib/ai/tools/loop");
+      const summary = await runToolLoop(
+        lastUser.content,
+        {
+          userId: userId ?? "guest",
+          projectId: activeProjectId,
+          conversationId,
+        },
+        { maxIterations: 3, timeoutMs: 8000 },
+      );
+      if (summary.combinedFormattedOutput) {
+        toolResultsFormatted = summary.combinedFormattedOutput;
+      }
+    } catch (toolErr) {
+      logger.warn("tools.loop_failed", {
+        error: toolErr instanceof Error ? toolErr.message : String(toolErr),
+      });
+    }
+  }
+
+  // Combine planned evidence with web evidence
+  const combinedEvidence = [webEvidenceFormatted, ...plannedEvidence]
+    .filter(Boolean)
+    .join("\n\n");
+
+  // Detect coding intent
+  const isCodingMode = Boolean(
+    intentResult.intent === "CODING" ||
+      intentResult.intent === "DEBUGGING" ||
+      (lastUser?.content &&
+        /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
+          lastUser.content,
+        )),
+  );
 
   const encoder = new TextEncoder();
   const persistedConversationId = conversationId;
@@ -261,11 +420,37 @@ export async function POST(request: Request) {
           ...(conversationTitle ? { title: conversationTitle } : {}),
         });
 
+        // Send citation frames for web search results
+        for (const citation of webCitationsList) {
+          send({
+            kind: "citation",
+            title: citation.title,
+            url: citation.url,
+            snippet: citation.snippet,
+          });
+        }
+
+        // Send citation frames for retrieved reference docs
+        for (const chunk of retrievedChunksList) {
+          send({
+            kind: "citation",
+            title: chunk.filename,
+            url: `#${chunk.filename}-p${chunk.chunkIndex + 1}`,
+            snippet: chunk.content.slice(0, 150) + "...",
+          });
+        }
+
         for await (const chunk of streamChat({
           messages,
           modelId,
           signal: abort.signal,
           userPreferences: personalisation.instructions,
+          projectInstructions: personalisation.projectInstructions,
+          projectDocumentsContext: retrievedContext,
+          toolResultsFormatted,
+          evidenceFormatted: combinedEvidence || null,
+          planSummary,
+          isCodingMode,
           memories: personalisation.memories,
         })) {
           if (chunk.kind === "content_delta") assistantText += chunk.delta;

@@ -16,7 +16,7 @@ import { isDatabaseReachable } from "@/lib/db/available";
 import { isFeatureEnabled } from "@/lib/features";
 import { parseFile } from "@/lib/files/parser";
 import { storeFile } from "@/lib/files/storage";
-import { ALLOWED_EXTENSIONS, validateUpload } from "@/lib/files/validate";
+import { ALLOWED_EXTENSIONS, sanitizeFilename, validateUpload } from "@/lib/files/validate";
 import { logger } from "@/lib/observability/logger";
 import {
   badRequest,
@@ -33,25 +33,6 @@ export const runtime = "nodejs";
 
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
-const MAX_FILENAME_LENGTH = 255;
-
-/**
- * Strip a client-supplied filename down to a display label.
- *
- * Defence in depth: the stored path is random and never derived from this value,
- * but the name is echoed to the UI and written to the database, so directory
- * separators and control characters come out here regardless (§53).
- */
-function displayName(raw: string): string {
-  const base = raw.split(/[\\/]/).pop() ?? "file";
-  const cleaned = base
-    // Control characters and DEL, written as escapes: literal control bytes in
-    // source survive editors and transforms poorly.
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/^\.+/, "")
-    .trim();
-  return (cleaned || "file").slice(0, MAX_FILENAME_LENGTH);
-}
 
 export async function POST(request: Request) {
   if (!isFeatureEnabled("file_uploads")) {
@@ -91,7 +72,7 @@ export async function POST(request: Request) {
     return badRequest("Missing `file` field.");
   }
 
-  const filename = displayName(entry.name || "file");
+  const filename = sanitizeFilename(entry.name || "file");
   const mimeType = entry.type || "application/octet-stream";
 
   const validation = validateUpload({

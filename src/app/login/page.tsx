@@ -24,6 +24,8 @@ export default function LoginPage() {
   const params = useSearchParams();
   const { snapshot, loading } = useRuntime();
 
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,23 +39,61 @@ export default function LoginPage() {
     event.preventDefault();
     setBusy(true);
     setError(null);
+
     try {
-      const result = await signIn("credentials", {
-        email,
-        password,
-        redirect: false,
-      });
-      if (result?.error) {
-        // Deliberately not "no such user" vs "wrong password".
-        setError("That email and password do not match an account.");
-        return;
+      if (mode === "signup") {
+        if (password.length < 8) {
+          setError("Password must be at least 8 characters long.");
+          setBusy(false);
+          return;
+        }
+
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, name }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error?.message || data.message || "Registration failed.");
+          setBusy(false);
+          return;
+        }
+
+        // Auto sign-in after successful registration
+        const signInResult = await signIn("credentials", {
+          email,
+          password,
+          redirect: false,
+        });
+
+        if (signInResult?.error) {
+          setError("Account created, but could not automatically sign in. Please sign in.");
+          setMode("signin");
+          return;
+        }
+
+        router.push(next);
+        router.refresh();
+      } else {
+        const result = await signIn("credentials", {
+          email,
+          password,
+          redirect: false,
+        });
+        if (result?.error) {
+          setError("That email and password do not match an account.");
+          return;
+        }
+        router.push(next);
+        router.refresh();
       }
-      router.push(next);
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Could not reach the sign-in endpoint.",
+          : "Could not reach authentication endpoint.",
       );
     } finally {
       setBusy(false);
@@ -72,15 +112,68 @@ export default function LoginPage() {
           <div className="mt-8 h-44 animate-pulse rounded-2xl bg-muted/60" />
         ) : accountsPossible ? (
           <>
-            <h1 className="mt-7 font-display text-2xl font-semibold tracking-tight">
-              Sign in
-            </h1>
+            <div className="mt-7 flex items-center justify-between">
+              <h1 className="font-display text-2xl font-semibold tracking-tight">
+                {mode === "signin" ? "Sign in" : "Create account"}
+              </h1>
+              <div className="flex rounded-lg border border-border p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("signin");
+                    setError(null);
+                  }}
+                  className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                    mode === "signin"
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("signup");
+                    setError(null);
+                  }}
+                  className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                    mode === "signup"
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Sign up
+                </button>
+              </div>
+            </div>
+
             <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
-              Accounts separate saved conversations and memories. Chatting itself
-              never requires one.
+              {mode === "signin"
+                ? "Sign in to access your saved conversations and personalized memories."
+                : "Create an account to keep your conversation history across devices."}
             </p>
 
             <form onSubmit={onSubmit} className="mt-6 space-y-3">
+              {mode === "signup" && (
+                <div>
+                  <label
+                    htmlFor="name"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
+                    Name (optional)
+                  </label>
+                  <input
+                    id="name"
+                    type="text"
+                    autoComplete="name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
+                  />
+                </div>
+              )}
+
               <div>
                 <label
                   htmlFor="email"
@@ -98,17 +191,18 @@ export default function LoginPage() {
                   className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
                 />
               </div>
+
               <div>
                 <label
                   htmlFor="password"
                   className="text-xs font-medium text-muted-foreground"
                 >
-                  Password
+                  Password {mode === "signup" && <span className="text-[10px]">(min 8 characters)</span>}
                 </label>
                 <input
                   id="password"
                   type="password"
-                  autoComplete="current-password"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
                   required
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
@@ -124,7 +218,7 @@ export default function LoginPage() {
 
               <Button type="submit" className="w-full" disabled={busy}>
                 {busy && <Loader2 className="animate-spin" aria-hidden />}
-                Sign in
+                {mode === "signin" ? "Sign in" : "Create account"}
               </Button>
             </form>
           </>

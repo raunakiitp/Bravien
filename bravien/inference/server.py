@@ -39,6 +39,7 @@ from bravien.inference.engine import (
     InferenceEngine,
     PromptTooLongError,
 )
+from bravien.inference.hf_engine import HFInferenceEngine
 from bravien.model.generation import GenerationConfig
 from bravien.tokenizer.templates import ChatTemplateError
 from bravien.utils.logging import get_logger
@@ -71,7 +72,7 @@ class _Strict(BaseModel):
 
 
 class SamplingParams(_Strict):
-    max_tokens: int | None = Field(default=None, ge=1, le=8192)
+    max_tokens: int | None = Field(default=None, ge=1, le=32768)
     temperature: float | None = Field(default=None, ge=0.0, le=5.0)
     top_k: int | None = Field(default=None, ge=0, le=1_000_000)
     top_p: float | None = Field(default=None, gt=0.0, le=1.0)
@@ -144,7 +145,7 @@ class TokenizeRequest(_Strict):
     #: and most callers only need the length.
     include_ids: bool = False
     #: Output reservation used when reporting whether `messages` fits.
-    max_tokens: int | None = Field(default=None, ge=1, le=8192)
+    max_tokens: int | None = Field(default=None, ge=1, le=32768)
 
     @field_validator("messages")
     @classmethod
@@ -213,28 +214,51 @@ class EngineHolder:
     """
 
     def __init__(self, max_concurrency: int = 1) -> None:
-        self.engine: InferenceEngine | None = None
+        self.engine: InferenceEngine | HFInferenceEngine | None = None
         self.error: str | None = None
         self._slots = threading.BoundedSemaphore(max_concurrency)
         self.max_concurrency = max_concurrency
 
     def load(self, path: str | Path, config: EngineConfig | None = None) -> None:
+        path_str = str(path)
         try:
+            # Check if this is a HuggingFace model repo id or directory
+            if "/" in path_str and not Path(path).exists():
+                self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
+                self.error = None
+                return
+
+            if Path(path).exists() and not (Path(path) / "config.json").exists() and not (Path(path) / "tokenizer.json").exists():
+                # If directory doesn't have native Bravien config, try HF
+                try:
+                    self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
+                    self.error = None
+                    return
+                except Exception:
+                    pass
+
             self.engine = InferenceEngine.from_checkpoint(path, config=config)
             self.error = None
-        except (EngineError, FileNotFoundError, ValueError, RuntimeError) as exc:
+        except Exception as exc:
+            # Fallback attempt via HF if standard loading failed
+            try:
+                self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
+                self.error = None
+                return
+            except Exception:
+                pass
             self.engine = None
             self.error = str(exc)
-            logger.error("could not load checkpoint %s: %s", path, exc)
+            logger.error("could not load checkpoint/model %s: %s", path, exc)
 
-    def require(self) -> InferenceEngine:
+    def require(self) -> InferenceEngine | HFInferenceEngine:
         if self.engine is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
                     "code": "model_not_loaded",
                     "message": self.error
-                    or "no checkpoint is loaded; train one and set BRAVIEN_CHECKPOINT",
+                    or "no checkpoint is loaded; train one or provide a valid model",
                 },
             )
         return self.engine
@@ -373,6 +397,25 @@ def create_app(
         state.load(checkpoint, engine_config)
 
     # ------------------------------------------------------------- diagnostics
+
+    @app.get("/")
+    def root() -> dict[str, Any]:
+        """Root endpoint with quick server status and API links."""
+        engine = state.engine
+        return {
+            "name": "Bravien Inference API",
+            "status": "online" if engine is not None else "no_model",
+            "model": engine.model_name if engine else None,
+            "device": engine.device_info.name if engine else None,
+            "endpoints": {
+                "health": "/health",
+                "docs": "/docs",
+                "models": "/v1/models",
+                "chat_completions": "/v1/chat/completions",
+                "completions": "/v1/completions",
+            },
+            "web_ui": "Run 'npm run dev' to access the frontend at http://localhost:3000",
+        }
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -579,13 +622,13 @@ def create_app(
     return app
 
 
-def resolve_checkpoint_path(explicit: str | Path | None = None) -> Path:
+def resolve_checkpoint_path(explicit: str | Path | None = None) -> Path | str:
     """Where to load weights from: the argument, then env, then the default run."""
     if explicit:
-        return Path(explicit)
-    from_env = os.environ.get("BRAVIEN_CHECKPOINT")
+        return explicit if ("/" in str(explicit) and not Path(explicit).exists()) else Path(explicit)
+    from_env = os.environ.get("BRAVIEN_CHECKPOINT") or os.environ.get("BRAVIEN_MODEL")
     if from_env:
-        return Path(from_env)
+        return from_env if ("/" in from_env and not Path(from_env).exists()) else Path(from_env)
     return Path("checkpoints") / "bravien"
 
 

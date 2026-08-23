@@ -17,6 +17,8 @@ import {
   Pencil,
   RefreshCw,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   X,
 } from "lucide-react";
 
@@ -50,6 +52,38 @@ function CopyButton({ text }: { text: string }) {
         <Copy aria-hidden />
       )}
     </Button>
+  );
+}
+
+function FeedbackButtons({ messageId }: { messageId: string }) {
+  const [feedback, setFeedback] = useState<"LIKE" | "DISLIKE" | null>(null);
+
+  const sendFeedback = (rating: "LIKE" | "DISLIKE") => {
+    const next = feedback === rating ? null : rating;
+    setFeedback(next);
+  };
+
+  return (
+    <div className="flex items-center gap-0.5">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Helpful response"
+        className={cn(feedback === "LIKE" && "text-brand bg-brand/10")}
+        onClick={() => sendFeedback("LIKE")}
+      >
+        <ThumbsUp className="size-3" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Unhelpful response"
+        className={cn(feedback === "DISLIKE" && "text-destructive bg-destructive/10")}
+        onClick={() => sendFeedback("DISLIKE")}
+      >
+        <ThumbsDown className="size-3" />
+      </Button>
+    </div>
   );
 }
 
@@ -314,6 +348,7 @@ function AssistantTurn({
                 <RefreshCw aria-hidden />
               </Button>
             )}
+            <FeedbackButtons messageId={message.id} />
             {message.usage?.outputTokens != null && (
               <span className="ml-1 font-mono text-[10px] text-muted-foreground">
                 {message.usage.outputTokens} tok

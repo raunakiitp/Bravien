@@ -1,20 +1,19 @@
 "use client";
 
 /**
- * Conversation history rail.
- *
- * Rendered as a fixed rail on wide screens and a slide-over on narrow ones. When
- * persistence is off the list is replaced by an explanation of what to configure,
- * because the honest answer to "where is my history" is "it was never saved".
+ * Conversation history & projects navigation rail.
  */
 
 import { useState } from "react";
 import Link from "next/link";
 import {
   Database,
+  FolderKanban,
+  FolderPlus,
   MessageSquarePlus,
   Pin,
   PinOff,
+  Plus,
   Search,
   Settings,
   Trash2,
@@ -25,6 +24,7 @@ import { toast } from "sonner";
 import { BravienWordmark } from "@/components/bravien/mark";
 import { Button } from "@/components/ui/button";
 import type { UseConversationsResult } from "@/hooks/use-conversations";
+import { useProjects } from "@/hooks/use-projects";
 import { cn } from "@/lib/utils";
 
 function relativeTime(iso: string): string {
@@ -44,8 +44,8 @@ function relativeTime(iso: string): string {
 export interface SidebarProps {
   history: UseConversationsResult;
   activeId: string | null;
+  activeProjectId?: string | null;
   onClose?: () => void;
-  /** Fired when a link in here is followed, so a slide-over can close itself. */
   onNavigate?: () => void;
   className?: string;
 }
@@ -53,11 +53,18 @@ export interface SidebarProps {
 export function Sidebar({
   history,
   activeId,
+  activeProjectId,
   onClose,
   onNavigate,
   className,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDesc, setNewProjectDesc] = useState("");
+  const [creatingBusy, setCreatingBusy] = useState(false);
+
+  const { projects, create: createProject, remove: removeProject } = useProjects();
 
   const filtered = query.trim()
     ? history.items.filter((c) =>
@@ -65,13 +72,33 @@ export function Sidebar({
       )
     : history.items;
 
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newProjectName.trim()) return;
+    setCreatingBusy(true);
+    try {
+      await createProject({
+        name: newProjectName.trim(),
+        description: newProjectDesc.trim() || null,
+      });
+      setNewProjectName("");
+      setNewProjectDesc("");
+      setIsCreatingProject(false);
+      toast.success("Project created");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create project");
+    } finally {
+      setCreatingBusy(false);
+    }
+  }
+
   return (
     <aside
       className={cn(
         "flex h-full w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
         className,
       )}
-      aria-label="Conversation history"
+      aria-label="Sidebar navigation"
     >
       <div className="flex items-center justify-between px-3 py-3">
         <Link
@@ -85,7 +112,7 @@ export function Sidebar({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Close history"
+            aria-label="Close sidebar"
             onClick={onClose}
             className="lg:hidden"
           >
@@ -94,7 +121,7 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="px-3">
+      <div className="px-3 space-y-1.5">
         <Button
           className="w-full justify-start"
           size="lg"
@@ -105,7 +132,7 @@ export function Sidebar({
         </Button>
       </div>
 
-      {history.state === "ready" && history.items.length > 4 && (
+      {history.state === "ready" && (
         <div className="relative mt-3 px-3">
           <Search
             className="pointer-events-none absolute top-1/2 left-5.5 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -114,14 +141,94 @@ export function Sidebar({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter conversations"
-            aria-label="Filter conversations"
+            placeholder="Search conversations..."
+            aria-label="Search conversations"
             className="h-8 w-full rounded-lg border border-sidebar-border bg-background/60 pr-2 pl-8 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
           />
         </div>
       )}
 
-      <nav className="mt-3 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="mt-4 px-3 flex items-center justify-between text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+        <span className="flex items-center gap-1.5">
+          <FolderKanban className="size-3.5 text-brand" />
+          Projects
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="New Project"
+          onClick={() => setIsCreatingProject(!isCreatingProject)}
+        >
+          <Plus className="size-3.5" />
+        </Button>
+      </div>
+
+      {isCreatingProject && (
+        <form onSubmit={handleCreateProject} className="mx-3 mt-1.5 p-2.5 rounded-lg border border-border bg-background/80 space-y-2">
+          <input
+            autoFocus
+            type="text"
+            required
+            placeholder="Project name"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            className="w-full h-7 px-2 text-xs rounded border border-border bg-background outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Short description (optional)"
+            value={newProjectDesc}
+            onChange={(e) => setNewProjectDesc(e.target.value)}
+            className="w-full h-7 px-2 text-xs rounded border border-border bg-background outline-none"
+          />
+          <div className="flex justify-end gap-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => setIsCreatingProject(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="xs" disabled={creatingBusy}>
+              {creatingBusy ? "Creating..." : "Create"}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {projects.length > 0 && (
+        <ul className="mt-1 px-2 space-y-0.5 max-h-36 overflow-y-auto">
+          {projects.map((proj) => {
+            const active = proj.id === activeProjectId;
+            return (
+              <li key={proj.id} className="group/proj relative">
+                <Link
+                  href={`/project/${proj.id}`}
+                  onClick={onNavigate}
+                  className={cn(
+                    "flex items-center justify-between rounded-lg py-1.5 px-2.5 text-xs transition-colors",
+                    active
+                      ? "bg-brand/10 text-brand font-medium border border-brand/20"
+                      : "hover:bg-sidebar-accent/60 text-sidebar-foreground",
+                  )}
+                >
+                  <span className="truncate">{proj.name}</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">
+                    {proj.conversationCount ?? 0} chats
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <div className="mt-4 px-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+        Conversations
+      </div>
+
+      <nav className="mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {history.state === "loading" && (
           <ul className="space-y-1.5 px-1" aria-label="Loading history">
             {[0, 1, 2, 3].map((i) => (
@@ -231,7 +338,6 @@ export function Sidebar({
                     size="icon-xs"
                     aria-label={`Delete ${conversation.title}`}
                     onClick={() => {
-                      // Deleting messages is not undoable, so it is confirmed.
                       if (
                         !window.confirm(
                           `Delete "${conversation.title}" and its messages? This cannot be undone.`,
@@ -258,7 +364,16 @@ export function Sidebar({
         </ul>
       </nav>
 
-      <div className="border-t border-sidebar-border p-2">
+      <div className="border-t border-sidebar-border p-2 space-y-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          nativeButton={false}
+          render={<Link href="/tasks" onClick={onNavigate} />}
+        >
+          <FolderKanban aria-hidden className="mr-2 h-4 w-4" /> Tasks &amp; Workspaces
+        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -266,7 +381,7 @@ export function Sidebar({
           nativeButton={false}
           render={<Link href="/settings" onClick={onNavigate} />}
         >
-          <Settings aria-hidden /> Settings
+          <Settings aria-hidden className="mr-2 h-4 w-4" /> Settings
         </Button>
       </div>
     </aside>
