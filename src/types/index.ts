@@ -143,9 +143,22 @@ export type ChatStreamFrame =
     };
 
 
+export interface ProjectDTO {
+  id: string;
+  userId: string;
+  name: string;
+  description: string | null;
+  instructions: string | null;
+  createdAt: string;
+  updatedAt: string;
+  conversationCount?: number;
+  attachmentCount?: number;
+}
+
 export interface ConversationDTO {
   id: string;
   userId: string;
+  projectId?: string | null;
   title: string;
   model: string;
   pinned: boolean;
@@ -176,11 +189,16 @@ export type MemoryType =
   | "EXPLICIT"
   | "PREFERENCE"
   | "PROJECT"
-  | "CONVERSATION";
+  | "CONVERSATION"
+  | "PROFILE"
+  | "INSTRUCTION"
+  | "FACT"
+  | "WORKFLOW";
 
 export interface MemoryDTO {
   id: string;
   userId: string;
+  projectId?: string | null;
   type: MemoryType;
   content: string;
   source: string | null;

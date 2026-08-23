@@ -30,6 +30,8 @@ export type PromptTier = "minimal" | "compact" | "full";
 
 export interface BuildSystemPromptOptions {
   userPreferences?: string | null;
+  projectInstructions?: string | null;
+  projectDocumentsContext?: string | null;
   memories?: string[];
   modelInstructions?: string | null;
   /**
@@ -121,8 +123,8 @@ const TIERS: Record<PromptTier, TierSpec> = {
   // A 512-token model has ~350 tokens left for the actual conversation after the
   // core prompt. Spending any of that on stored preferences is the wrong trade.
   minimal: { prompt: MINIMAL_PROMPT, extraChars: 0 },
-  compact: { prompt: COMPACT_PROMPT, extraChars: 400 },
-  full: { prompt: FULL_PROMPT, extraChars: 4_000 },
+  compact: { prompt: COMPACT_PROMPT, extraChars: 800 },
+  full: { prompt: FULL_PROMPT, extraChars: 8_000 },
 };
 
 /** Which prompt a model with this context window can afford. */
@@ -176,6 +178,13 @@ export function buildSystemPromptDetailed(
     );
   }
 
+  if (options.projectInstructions?.trim()) {
+    addExtra(
+      "project instructions",
+      `Project-specific instructions (follow closely):\n${options.projectInstructions.trim()}`,
+    );
+  }
+
   if (options.userPreferences?.trim()) {
     addExtra(
       "user preferences",
@@ -190,7 +199,14 @@ export function buildSystemPromptDetailed(
   if (memoryBlock) {
     addExtra(
       "memories",
-      `Relevant memories about the user (use carefully; do not over-index):\n${memoryBlock}`,
+      `Relevant memories about the user/project (use carefully; do not over-index):\n${memoryBlock}`,
+    );
+  }
+
+  if (options.projectDocumentsContext?.trim()) {
+    addExtra(
+      "project documents",
+      options.projectDocumentsContext.trim(),
     );
   }
 

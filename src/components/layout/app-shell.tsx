@@ -46,8 +46,9 @@ export interface AppShellProps {
   history: UseConversationsResult;
   snapshot: RuntimeSnapshot | null;
   runtimeLoading: boolean;
-  onRefreshRuntime: () => void;
-  activeId: string | null;
+  onRefreshRuntime?: () => void;
+  activeId?: string | null;
+  activeProjectId?: string | null;
   title?: string;
   children: React.ReactNode;
 }
@@ -57,7 +58,8 @@ export function AppShell({
   snapshot,
   runtimeLoading,
   onRefreshRuntime,
-  activeId,
+  activeId = null,
+  activeProjectId = null,
   title,
   children,
 }: AppShellProps) {
@@ -75,7 +77,11 @@ export function AppShell({
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden">
       <div className="hidden lg:flex">
-        <Sidebar history={history} activeId={activeId} />
+        <Sidebar
+          history={history}
+          activeId={activeId}
+          activeProjectId={activeProjectId}
+        />
       </div>
 
       {railOpen && (
@@ -90,6 +96,7 @@ export function AppShell({
             <Sidebar
               history={history}
               activeId={activeId}
+              activeProjectId={activeProjectId}
               onClose={() => setRailOpen(false)}
               // Closed where the navigation happens, rather than by watching the
               // route change from an effect.

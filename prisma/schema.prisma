@@ -35,6 +35,10 @@ enum MemoryType {
   PREFERENCE
   PROJECT
   CONVERSATION
+  PROFILE
+  INSTRUCTION
+  FACT
+  WORKFLOW
 }
 
 enum ToolExecutionStatus {
@@ -77,6 +81,7 @@ model User {
 
   accounts      Account[]
   sessions      Session[]
+  projects      Project[]
   conversations Conversation[]
   memories      Memory[]
   attachments   Attachment[]
@@ -84,6 +89,25 @@ model User {
   feedbacks     Feedback[]
   apiKeys       ApiKey[]
   subscription  Subscription?
+}
+
+model Project {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  description  String?
+  instructions String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  attachments   Attachment[]
+  memories      Memory[]
+  chunks        DocumentChunk[]
+
+  @@index([userId, updatedAt])
+  @@index([userId, name])
 }
 
 model Account {
@@ -125,6 +149,7 @@ model VerificationToken {
 model Conversation {
   id        String    @id @default(cuid())
   userId    String
+  projectId String?
   title     String
   model     String
   pinned    Boolean   @default(false)
@@ -137,6 +162,7 @@ model Conversation {
   updatedAt DateTime  @updatedAt
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
   messages        Message[]
   attachments     Attachment[]
   toolExecutions  ToolExecution[]
@@ -145,6 +171,7 @@ model Conversation {
 
   @@index([userId, updatedAt])
   @@index([userId, title])
+  @@index([projectId, updatedAt])
 }
 
 model Message {
@@ -174,6 +201,7 @@ model Message {
 model Attachment {
   id             String           @id @default(cuid())
   userId         String
+  projectId      String?
   conversationId String?
   messageId      String?
   filename       String
@@ -185,16 +213,37 @@ model Attachment {
   metadata       Json?
   createdAt      DateTime         @default(now())
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  message      Message?      @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project        Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  conversation   Conversation?    @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  message        Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  documentChunks DocumentChunk[]
 
   @@index([userId])
+  @@index([projectId])
+}
+
+model DocumentChunk {
+  id           String   @id @default(cuid())
+  projectId    String?
+  attachmentId String
+  chunkIndex   Int
+  content      String   @db.Text
+  tokenCount   Int?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  project    Project?   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, chunkIndex])
+  @@index([attachmentId, chunkIndex])
 }
 
 model Memory {
   id                   String     @id @default(cuid())
   userId               String
+  projectId            String?
   type                 MemoryType
   content              String     @db.Text
   sourceConversationId String?
@@ -202,9 +251,11 @@ model Memory {
   updatedAt            DateTime   @updatedAt
 
   user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project            Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
   sourceConversation Conversation? @relation(fields: [sourceConversationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([projectId])
 }
 
 model ToolExecution {

@@ -10,11 +10,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Loader2, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, Mic, MicOff, Paperclip, Square, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import type { ChatAttachment } from "@/hooks/use-chat";
+import { BrowserSpeechInputProvider, isSpeechRecognitionSupported } from "@/lib/voice/speech";
 import { cn } from "@/lib/utils";
 import { apiErrorFrom, type UploadResponse } from "@/types/api";
 
@@ -44,8 +45,43 @@ export function Composer({
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const speechProviderRef = useRef<BrowserSpeechInputProvider | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    speechProviderRef.current = new BrowserSpeechInputProvider();
+    return () => {
+      speechProviderRef.current?.stop();
+    };
+  }, []);
+
+  function toggleVoice() {
+    if (!isSpeechRecognitionSupported()) {
+      toast.error("Speech recognition is not supported in this browser.");
+      return;
+    }
+
+    if (isListening) {
+      speechProviderRef.current?.stop();
+      setIsListening(false);
+    } else {
+      const started = speechProviderRef.current?.start({
+        onTranscript: (text) => {
+          setValue((prev) => (prev ? `${prev} ${text}` : text));
+        },
+        onError: (err) => {
+          setIsListening(false);
+          toast.error(`Voice error: ${err}`);
+        },
+        onEnd: () => {
+          setIsListening(false);
+        },
+      });
+      if (started) setIsListening(true);
+    }
+  }
 
   // Grow with the content up to a ceiling, then scroll inside.
   const resize = useCallback(() => {
@@ -64,6 +100,10 @@ export function Composer({
   const submit = () => {
     const text = value.trim();
     if (!text || busy || disabled) return;
+    if (isListening) {
+      speechProviderRef.current?.stop();
+      setIsListening(false);
+    }
     onSend(text, attachments);
     setValue("");
     setAttachments([]);
@@ -194,6 +234,18 @@ export function Composer({
           }}
           className="max-h-[280px] min-h-9 flex-1 resize-none bg-transparent px-1.5 py-2 text-[15px] leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
         />
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={isListening ? "Stop microphone" : "Speak message"}
+          disabled={disabled}
+          onClick={toggleVoice}
+          className={cn(isListening && "text-brand bg-brand/10 animate-pulse")}
+        >
+          {isListening ? <MicOff aria-hidden /> : <Mic aria-hidden />}
+        </Button>
 
         {busy ? (
           <Button

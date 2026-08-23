@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { ChatView } from "@/components/chat/chat-view";
 import { AppShell } from "@/components/layout/app-shell";
@@ -35,6 +36,9 @@ export function ChatWorkspace({
 }: {
   conversationId?: string | null;
 }) {
+  const searchParams = useSearchParams();
+  const projectParam = searchParams.get("project");
+
   const runtime = useRuntime();
   const history = useConversations();
 
@@ -149,10 +153,11 @@ export function ChatWorkspace({
       ) : (
         <ChatView
           // Remount when the conversation changes so no turn leaks between them.
-          key={conversationId ?? "new"}
+          key={conversationId ?? `new-${projectParam ?? "default"}`}
           snapshot={runtime.snapshot}
           runtimeLoading={runtime.loading}
           conversationId={conversationId}
+          projectId={projectParam}
           initialMessages={initialMessages}
           onConversationCreated={onConversationCreated}
         />

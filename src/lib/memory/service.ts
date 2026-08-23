@@ -6,6 +6,7 @@ function toDTO(row: Memory): MemoryDTO {
   return {
     id: row.id,
     userId: row.userId,
+    projectId: row.projectId ?? null,
     type: row.type as MemoryType,
     content: row.content,
     source: row.sourceConversationId,
@@ -16,6 +17,7 @@ function toDTO(row: Memory): MemoryDTO {
 
 export interface CreateMemoryInput {
   userId: string;
+  projectId?: string | null;
   type: MemoryType;
   content: string;
   sourceConversationId?: string | null;
@@ -23,19 +25,21 @@ export interface CreateMemoryInput {
 
 export interface UpdateMemoryInput {
   content?: string;
+  projectId?: string | null;
   type?: MemoryType;
   sourceConversationId?: string | null;
 }
 
 export async function listMemories(
   userId: string,
-  options?: { type?: MemoryType; take?: number },
+  options?: { type?: MemoryType; projectId?: string | null; take?: number },
 ): Promise<MemoryDTO[]> {
+  const where: Record<string, unknown> = { userId };
+  if (options?.type) where.type = options.type as PrismaMemoryType;
+  if (options?.projectId !== undefined) where.projectId = options.projectId;
+
   const rows = await prisma.memory.findMany({
-    where: {
-      userId,
-      ...(options?.type ? { type: options.type as PrismaMemoryType } : {}),
-    },
+    where,
     orderBy: { updatedAt: "desc" },
     take: options?.take ?? 100,
   });
@@ -56,6 +60,7 @@ export async function createMemory(
   const row = await prisma.memory.create({
     data: {
       userId: input.userId,
+      projectId: input.projectId ?? null,
       type: input.type as PrismaMemoryType,
       content: input.content,
       sourceConversationId: input.sourceConversationId ?? null,
@@ -76,6 +81,7 @@ export async function updateMemory(
     where: { id },
     data: {
       ...(input.content !== undefined ? { content: input.content } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.type !== undefined
         ? { type: input.type as PrismaMemoryType }
         : {}),
@@ -97,13 +103,61 @@ export async function deleteMemory(
   return true;
 }
 
-/** Flat string list for system prompt injection. */
+export async function clearMemories(
+  userId: string,
+  options?: { projectId?: string | null },
+): Promise<number> {
+  const where: Record<string, unknown> = { userId };
+  if (options?.projectId !== undefined) {
+    where.projectId = options.projectId;
+  }
+  const result = await prisma.memory.deleteMany({ where });
+  return result.count;
+}
+
+export async function searchMemories(
+  userId: string,
+  query: string,
+  options?: { projectId?: string | null; limit?: number },
+): Promise<MemoryDTO[]> {
+  const q = query.trim();
+  if (!q) return listMemories(userId, options);
+
+  const where: Record<string, unknown> = {
+    userId,
+    content: { contains: q, mode: "insensitive" },
+  };
+  if (options?.projectId !== undefined) {
+    where.projectId = options.projectId;
+  }
+
+  const rows = await prisma.memory.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    take: options?.limit ?? 20,
+  });
+  return rows.map(toDTO);
+}
+
+/** Flat string list for system prompt injection, user and project-scoped. */
 export async function getMemoryContentsForPrompt(
   userId: string,
-  take = 20,
+  options?: { projectId?: string | null; take?: number },
 ): Promise<string[]> {
+  const take = options?.take ?? 20;
+  const where: Record<string, unknown> = {
+    userId,
+  };
+
+  if (options?.projectId) {
+    where.OR = [
+      { projectId: options.projectId },
+      { projectId: null },
+    ];
+  }
+
   const rows = await prisma.memory.findMany({
-    where: { userId },
+    where,
     orderBy: { updatedAt: "desc" },
     take,
     select: { content: true },

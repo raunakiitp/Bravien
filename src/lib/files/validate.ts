@@ -15,10 +15,12 @@ export const ALLOWED_MIME_TYPES = new Set([
   "text/markdown",
   "text/csv",
   "application/json",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 /** Extensions matching the allowlist, for a friendlier error message. */
-export const ALLOWED_EXTENSIONS = [".txt", ".md", ".csv", ".json"];
+export const ALLOWED_EXTENSIONS = [".txt", ".md", ".csv", ".json", ".pdf", ".docx"];
 
 export interface FileValidationResult {
   ok: boolean;

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { requireUser, UnauthorizedError } from "@/lib/auth/session";
 import { isDatabaseReachable } from "@/lib/db/available";
-import { deleteMemory, getMemory, updateMemory } from "@/lib/memory/service";
+import { deleteProject, getProject, updateProject } from "@/lib/db/projects";
 import { logger } from "@/lib/observability/logger";
 import {
   badRequest,
@@ -15,22 +15,11 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const patchMemorySchema = z
+const patchProjectSchema = z
   .object({
-    content: z.string().min(1).max(4000).optional(),
-    type: z
-      .enum([
-        "EXPLICIT",
-        "PREFERENCE",
-        "PROJECT",
-        "CONVERSATION",
-        "PROFILE",
-        "INSTRUCTION",
-        "FACT",
-        "WORKFLOW",
-      ])
-      .optional(),
-    projectId: z.string().max(64).optional().nullable(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).optional().nullable(),
+    instructions: z.string().max(20000).optional().nullable(),
   })
   .strict();
 
@@ -48,13 +37,19 @@ export async function GET(
   }
 
   if (!(await isDatabaseReachable())) {
-    return jsonError(503, "PERSISTENCE_UNAVAILABLE", "Database unavailable.");
+    return jsonError(
+      503,
+      "PERSISTENCE_UNAVAILABLE",
+      "Database unavailable.",
+    );
   }
 
-  const memory = await getMemory(userId, id);
-  if (!memory) return notFound("Memory not found.");
+  const project = await getProject(userId, id);
+  if (!project) {
+    return notFound("Project not found.");
+  }
 
-  return NextResponse.json({ memory });
+  return NextResponse.json({ project });
 }
 
 export async function PATCH(
@@ -81,20 +76,22 @@ export async function PATCH(
     return badRequest("Invalid JSON payload.");
   }
 
-  const parsed = patchMemorySchema.safeParse(json);
+  const parsed = patchProjectSchema.safeParse(json);
   if (!parsed.success) {
     return badRequest("Invalid update payload.", parsed.error.issues);
   }
 
   try {
-    const updated = await updateMemory(userId, id, parsed.data);
-    if (!updated) return notFound("Memory not found.");
+    const updated = await updateProject(userId, id, parsed.data);
+    if (!updated) {
+      return notFound("Project not found.");
+    }
     return NextResponse.json(updated);
   } catch (error) {
-    logger.error("memory.patch_failed", {
+    logger.error("project.patch_failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return jsonError(500, "MEMORY_UPDATE_ERROR", "Could not update memory.");
+    return jsonError(500, "PROJECT_UPDATE_ERROR", "Could not update project.");
   }
 }
 
@@ -116,13 +113,15 @@ export async function DELETE(
   }
 
   try {
-    const success = await deleteMemory(userId, id);
-    if (!success) return notFound("Memory not found.");
+    const success = await deleteProject(userId, id);
+    if (!success) {
+      return notFound("Project not found.");
+    }
     return new NextResponse(null, { status: 204 });
   } catch (error) {
-    logger.error("memory.delete_failed", {
+    logger.error("project.delete_failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return jsonError(500, "MEMORY_DELETE_ERROR", "Could not delete memory.");
+    return jsonError(500, "PROJECT_DELETE_ERROR", "Could not delete project.");
   }
 }
