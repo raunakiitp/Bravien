@@ -28,12 +28,49 @@ export interface FileValidationResult {
   code?: string;
 }
 
+export const MAX_FILENAME_LENGTH = 255;
+
+/**
+ * Sanitizes user-provided filenames to prevent path traversal and shell exploits.
+ */
+export function sanitizeFilename(raw: string): string {
+  if (!raw) return "file";
+  // Strip path traversal sequences and directory separators
+  const base = raw
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop() ?? "file";
+
+  // Remove null bytes, control characters, leading dots
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/^\.+/, "")
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .trim();
+
+  return (cleaned || "file").slice(0, MAX_FILENAME_LENGTH);
+}
+
 export function validateUpload(file: {
   mimeType: string;
   size: number;
   filename?: string;
 }): FileValidationResult {
   const { maxUploadBytes } = getConfig();
+
+  if (file.filename) {
+    const clean = sanitizeFilename(file.filename);
+    const hasValidExt = ALLOWED_EXTENSIONS.some((ext) =>
+      clean.toLowerCase().endsWith(ext),
+    );
+    if (!hasValidExt) {
+      return {
+        ok: false,
+        code: "UNSUPPORTED_EXTENSION",
+        error: `File extension is not supported. Supported: ${ALLOWED_EXTENSIONS.join(", ")}.`,
+      };
+    }
+  }
 
   if (!file.mimeType || !ALLOWED_MIME_TYPES.has(file.mimeType)) {
     return {

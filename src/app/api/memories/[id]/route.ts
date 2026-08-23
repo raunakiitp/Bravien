@@ -86,6 +86,17 @@ export async function PATCH(
     return badRequest("Invalid update payload.", parsed.error.issues);
   }
 
+  if (parsed.data.projectId) {
+    const { prisma } = await import("@/lib/db/prisma");
+    const ownedProject = await prisma.project.findFirst({
+      where: { id: parsed.data.projectId, userId },
+      select: { id: true },
+    });
+    if (!ownedProject) {
+      return badRequest("Specified project does not exist or belong to your account.");
+    }
+  }
+
   try {
     const updated = await updateMemory(userId, id, parsed.data);
     if (!updated) return notFound("Memory not found.");

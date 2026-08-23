@@ -204,6 +204,27 @@ export async function touchConversation(id: string): Promise<void> {
     .catch(() => undefined);
 }
 
+export async function deleteLastAssistantMessage(
+  userId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const owned = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    select: { id: true },
+  });
+  if (!owned) return false;
+
+  const lastMessage = await prisma.message.findFirst({
+    where: { conversationId, role: "assistant" },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (!lastMessage) return false;
+
+  await prisma.message.delete({ where: { id: lastMessage.id } });
+  return true;
+}
+
 export async function setMessageFeedback(
   userId: string,
   messageId: string,

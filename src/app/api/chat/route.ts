@@ -82,6 +82,7 @@ function rateLimitKey(request: Request, userId: string | null): string {
 async function loadPersonalisation(
   userId: string,
   projectId?: string | null,
+  query?: string,
 ): Promise<{
   instructions: string | null;
   projectInstructions: string | null;
@@ -105,7 +106,7 @@ async function loadPersonalisation(
           })
         : Promise.resolve(null),
       isFeatureEnabled("memory")
-        ? getMemoryContentsForPrompt(userId, { projectId, take: 20 })
+        ? getMemoryContentsForPrompt(userId, { projectId, query, take: 10 })
         : Promise.resolve([]),
     ]);
 
@@ -251,9 +252,9 @@ export async function POST(request: Request) {
   // runtime producing tokens nobody will read.
   request.signal.addEventListener("abort", () => abort.abort(), { once: true });
 
-  // Personalisation & project instructions
+  // Personalisation & project instructions (with query-based relevance scoring)
   const personalisation = canPersist && userId
-    ? await loadPersonalisation(userId, activeProjectId)
+    ? await loadPersonalisation(userId, activeProjectId, lastUser?.content)
     : { instructions: null, projectInstructions: null, memories: [] as string[] };
 
   // RAG document retrieval if conversation belongs to a project
@@ -285,21 +286,25 @@ export async function POST(request: Request) {
     }
   }
 
-  // Tool execution
+  // Tool execution loop with iteration bounds and timeout protection
   let toolResultsFormatted: string | null = null;
   if (lastUser?.content) {
     try {
-      const { detectAndExecuteTools } = await import("@/lib/ai/tools/registry");
-      const toolResults = await detectAndExecuteTools(lastUser.content, {
-        userId: userId ?? "guest",
-        projectId: activeProjectId,
-        conversationId,
-      });
-      if (toolResults.length > 0) {
-        toolResultsFormatted = toolResults.map((r) => r.formattedOutput).join("\n\n");
+      const { runToolLoop } = await import("@/lib/ai/tools/loop");
+      const summary = await runToolLoop(
+        lastUser.content,
+        {
+          userId: userId ?? "guest",
+          projectId: activeProjectId,
+          conversationId,
+        },
+        { maxIterations: 3, timeoutMs: 8000 },
+      );
+      if (summary.combinedFormattedOutput) {
+        toolResultsFormatted = summary.combinedFormattedOutput;
       }
     } catch (toolErr) {
-      logger.warn("tools.detection_failed", {
+      logger.warn("tools.loop_failed", {
         error: toolErr instanceof Error ? toolErr.message : String(toolErr),
       });
     }

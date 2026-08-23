@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db/prisma";
 import { isFeatureEnabled } from "@/lib/features";
 import { parseFile } from "@/lib/files/parser";
 import { storeFile } from "@/lib/files/storage";
-import { ALLOWED_EXTENSIONS, validateUpload } from "@/lib/files/validate";
+import { ALLOWED_EXTENSIONS, sanitizeFilename, validateUpload } from "@/lib/files/validate";
 import { logger } from "@/lib/observability/logger";
 import { chunkDocument } from "@/lib/rag/chunker";
 import {
@@ -26,16 +26,6 @@ export const runtime = "nodejs";
 
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
-const MAX_FILENAME_LENGTH = 255;
-
-function displayName(raw: string): string {
-  const base = raw.split(/[\\/]/).pop() ?? "file";
-  const cleaned = base
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/^\.+/, "")
-    .trim();
-  return (cleaned || "file").slice(0, MAX_FILENAME_LENGTH);
-}
 
 export async function GET(
   _request: Request,
@@ -132,7 +122,7 @@ export async function POST(
     return badRequest("Missing `file` field.");
   }
 
-  const filename = displayName(entry.name || "file");
+  const filename = sanitizeFilename(entry.name || "file");
   const mimeType = entry.type || "application/octet-stream";
 
   const validation = validateUpload({

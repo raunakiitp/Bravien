@@ -102,6 +102,17 @@ export async function POST(request: Request) {
     return badRequest("Invalid memory input.", parsed.error.issues);
   }
 
+  if (parsed.data.projectId) {
+    const { prisma } = await import("@/lib/db/prisma");
+    const ownedProject = await prisma.project.findFirst({
+      where: { id: parsed.data.projectId, userId },
+      select: { id: true },
+    });
+    if (!ownedProject) {
+      return badRequest("Specified project does not exist or belong to your account.");
+    }
+  }
+
   try {
     const memory = await createMemory({
       userId,
