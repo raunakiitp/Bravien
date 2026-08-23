@@ -66,6 +66,10 @@ export function RuntimeBadge({
         ? "No checkpoint loaded"
         : (model?.name ?? snapshot?.runtime.model ?? "Checkpoint loaded");
 
+  const stepLabel = model?.training?.step != null
+    ? `step ${model.training.step.toLocaleString()}`
+    : "pretrained";
+
   return (
     <span
       className={cn(
@@ -74,7 +78,7 @@ export function RuntimeBadge({
       )}
       title={
         tone === "ok" && model
-          ? `${formatParameters(model.parameters)} parameters · step ${model.training.step.toLocaleString()} · ${model.precision} on ${model.device}`
+          ? `${formatParameters(model.parameters ?? 0)} parameters · ${stepLabel} · ${model.precision ?? "fp16"} on ${model.device ?? "gpu"}`
           : (snapshot?.runtime.error ?? undefined)
       }
     >
@@ -89,8 +93,7 @@ export function RuntimeBadge({
       <span className="font-medium">{label}</span>
       {tone === "ok" && model && (
         <span className="font-mono text-[10px] text-muted-foreground">
-          {formatParameters(model.parameters)} · step{" "}
-          {model.training.step.toLocaleString()}
+          {formatParameters(model.parameters ?? 0)} · {stepLabel}
         </span>
       )}
       <span className="sr-only">
@@ -122,9 +125,9 @@ export function ModelCard({
   className?: string;
 }) {
   const synthetic = isSyntheticCheckpoint(model);
-  const trainLoss = model.training.metrics?.train_loss;
-  const evalLoss = model.training.metrics?.eval_loss;
-  const dataset = model.training.dataset as {
+  const trainLoss = model.training?.metrics?.train_loss;
+  const evalLoss = model.training?.metrics?.eval_loss;
+  const dataset = (model.training?.dataset ?? {}) as {
     tokens?: number;
     documents?: number;
     sources?: unknown;
@@ -138,7 +141,7 @@ export function ModelCard({
           {model.name}
         </h2>
         <span className="font-mono text-[10px] text-muted-foreground">
-          v{model.version}
+          v{model.version ?? "1.0.0"}
         </span>
       </div>
 
@@ -163,32 +166,32 @@ export function ModelCard({
         <dl className="divide-y divide-border/60">
           <Row
             label="Parameters"
-            value={`${formatParameters(model.parameters)} (${model.parameters.toLocaleString()})`}
+            value={`${formatParameters(model.parameters ?? 0)} (${(model.parameters ?? 0).toLocaleString()})`}
           />
-          <Row label="Architecture" value={model.architecture} />
+          <Row label="Architecture" value={model.architecture ?? "transformer"} />
           <Row
             label="Layers / heads"
-            value={`${model.layers} / ${model.heads} (${model.kv_heads} KV)`}
+            value={`${model.layers ?? "-"} / ${model.heads ?? "-"} (${model.kv_heads ?? "-"} KV)`}
           />
-          <Row label="Hidden size" value={model.hidden_size} />
+          <Row label="Hidden size" value={model.hidden_size ?? "-"} />
           <Row
             label="Context"
-            value={`${model.context_length.toLocaleString()} tokens`}
+            value={`${(model.context_length ?? 2048).toLocaleString()} tokens`}
           />
           <Row
             label="Norm / position / act"
-            value={`${model.norm} · ${model.position_encoding} · ${model.activation}`}
+            value={`${model.norm ?? "rmsnorm"} · ${model.position_encoding ?? "rope"} · ${model.activation ?? "silu"}`}
           />
         </dl>
 
         <dl className="divide-y divide-border/60">
           <Row
             label="Stage / step"
-            value={`${model.training.stage} · ${model.training.step.toLocaleString()}`}
+            value={`${model.training?.stage ?? "pretrained"} · ${(model.training?.step ?? 0).toLocaleString()}`}
           />
           <Row
             label="Tokens seen"
-            value={model.training.tokens_seen.toLocaleString()}
+            value={(model.training?.tokens_seen ?? 0).toLocaleString()}
           />
           {typeof trainLoss === "number" && (
             <Row label="Train loss" value={trainLoss.toFixed(4)} />
@@ -198,9 +201,9 @@ export function ModelCard({
           )}
           <Row
             label="Vocabulary"
-            value={`${model.tokenizer.vocab_size.toLocaleString()} tokens`}
+            value={`${(model.tokenizer?.vocab_size ?? model.vocab_size ?? 0).toLocaleString()} tokens`}
           />
-          <Row label="Precision / device" value={`${model.precision} · ${model.device}`} />
+          <Row label="Precision / device" value={`${model.precision ?? "fp16"} · ${model.device ?? "gpu"}`} />
           {typeof dataset.tokens === "number" && (
             <Row
               label="Corpus"

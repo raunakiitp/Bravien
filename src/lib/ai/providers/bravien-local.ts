@@ -229,7 +229,7 @@ export function toAIModel(info: RuntimeModelInfo): AIModel {
     provider: "bravien-local",
     capabilities: ["text"],
     contextWindow: info.context_length,
-    maxOutputTokens: Math.max(1, Math.floor(info.context_length / 2)),
+    maxOutputTokens: Math.max(1, Math.min(4096, Math.floor(info.context_length / 2))),
     isDefault: true,
   };
 }

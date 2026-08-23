@@ -8,10 +8,27 @@
  * the browser stored.
  */
 
+import { useEffect } from "react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    const handleGlobalError = (event: ErrorEvent) => {
+      if (
+        event.filename?.startsWith("chrome-extension://") ||
+        event.filename?.startsWith("moz-extension://") ||
+        event.filename?.startsWith("safari-extension://") ||
+        (event.message && typeof event.message === "string" && event.message.includes("M_ID"))
+      ) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("error", handleGlobalError, true);
+    return () => window.removeEventListener("error", handleGlobalError, true);
+  }, []);
+
   return (
     <ThemeProvider
       attribute="class"
