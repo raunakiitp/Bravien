@@ -38,8 +38,34 @@ export interface AIMessage {
   toolCalls?: AIToolCall[];
 }
 
+export type AgentEventType =
+  | "agent_started"
+  | "routing"
+  | "memory_loaded"
+  | "state_loaded"
+  | "planning"
+  | "plan_created"
+  | "step_started"
+  | "tool_started"
+  | "tool_completed"
+  | "research_started"
+  | "source_found"
+  | "evidence_added"
+  | "checkpoint_saved"
+  | "confirmation_required"
+  | "waiting_confirmation"
+  | "step_completed"
+  | "agent_completed"
+  | "agent_failed";
+
 export type AIStreamChunk =
   | { kind: "content_delta"; delta: string }
+  | {
+      kind: "agent_event";
+      eventType: AgentEventType;
+      message: string;
+      metadata?: Record<string, unknown>;
+    }
   | {
       kind: "tool_start";
       toolCallId: string;
