@@ -364,7 +364,16 @@ export function Sidebar({
         </ul>
       </nav>
 
-      <div className="border-t border-sidebar-border p-2">
+      <div className="border-t border-sidebar-border p-2 space-y-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
+          nativeButton={false}
+          render={<Link href="/tasks" onClick={onNavigate} />}
+        >
+          <FolderKanban aria-hidden className="mr-2 h-4 w-4" /> Tasks &amp; Workspaces
+        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -372,7 +381,7 @@ export function Sidebar({
           nativeButton={false}
           render={<Link href="/settings" onClick={onNavigate} />}
         >
-          <Settings aria-hidden /> Settings
+          <Settings aria-hidden className="mr-2 h-4 w-4" /> Settings
         </Button>
       </div>
     </aside>

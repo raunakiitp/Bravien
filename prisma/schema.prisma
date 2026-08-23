@@ -89,6 +89,8 @@ model User {
   feedbacks     Feedback[]
   apiKeys       ApiKey[]
   subscription  Subscription?
+  tasks         Task[]
+  activityLogs  ActivityLog[]
 }
 
 model Project {
@@ -105,6 +107,8 @@ model Project {
   attachments   Attachment[]
   memories      Memory[]
   chunks        DocumentChunk[]
+  tasks         Task[]
+  activityLogs  ActivityLog[]
 
   @@index([userId, updatedAt])
   @@index([userId, name])
@@ -338,4 +342,109 @@ model FeatureFlag {
   enabled     Boolean  @default(false)
   description String?
   updatedAt   DateTime @updatedAt
+}
+
+enum TaskStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TaskType {
+  RESEARCH
+  ANALYSIS
+  DOCUMENT
+  CODING
+  PROJECT
+  GENERAL
+}
+
+model Task {
+  id            String        @id @default(cuid())
+  userId        String
+  projectId     String?
+  title         String
+  description   String?       @db.Text
+  type          TaskType      @default(GENERAL)
+  status        TaskStatus    @default(PENDING)
+  priority      TaskPriority  @default(NORMAL)
+  resultSummary String?       @db.Text
+  metadata      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  completedAt   DateTime?
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project       Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  executions    TaskExecution[]
+  steps         TaskStep[]
+  activityLogs  ActivityLog[]
+
+  @@index([userId, status])
+  @@index([userId, projectId])
+  @@index([userId, updatedAt])
+}
+
+model TaskExecution {
+  id          String        @id @default(cuid())
+  taskId      String
+  status      TaskStatus    @default(RUNNING)
+  startedAt   DateTime      @default(now())
+  completedAt DateTime?
+  durationMs  Int?
+  error       String?       @db.Text
+  summary     String?       @db.Text
+  metadata    Json?
+
+  task        Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([status])
+}
+
+model TaskStep {
+  id          String        @id @default(cuid())
+  taskId      String
+  stepNumber  Int
+  title       String
+  description String?       @db.Text
+  status      TaskStatus    @default(PENDING)
+  toolName    String?
+  toolInput   Json?
+  toolResult  Json?
+  error       String?       @db.Text
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  task        Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, stepNumber])
+}
+
+model ActivityLog {
+  id          String    @id @default(cuid())
+  userId      String
+  projectId   String?
+  taskId      String?
+  eventType   String
+  description String
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task        Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([projectId])
+  @@index([taskId])
 }
