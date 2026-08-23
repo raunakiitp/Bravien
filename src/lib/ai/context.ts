@@ -9,6 +9,8 @@ export interface BuildContextOptions {
   projectInstructions?: string | null;
   projectDocumentsContext?: string | null;
   toolResultsFormatted?: string | null;
+  evidenceFormatted?: string | null;
+  planSummary?: string | null;
   memories?: string[];
   conversationSummary?: string | null;
   isCodingMode?: boolean;
@@ -27,12 +29,12 @@ function estimateTokens(text: string): number {
 }
 
 /**
- * Builds token-budget-aware context for model inference.
+ * Builds source-budget-aware context for model inference.
  * Prioritization order:
- * 1. System instructions & Bravien identity
- * 2. Current user request
- * 3. Tool results (calculation, time, memory search, etc.)
- * 4. Relevant project documents / RAG context
+ * 1. Protected System instructions & Bravien identity
+ * 2. Protected Current user request
+ * 3. Verified Evidence (Web research & Project documents)
+ * 4. Plan & Tool results
  * 5. Relevant memories
  * 6. Recent conversation history (with summary fallback)
  */
@@ -50,21 +52,33 @@ export function buildContext(options: BuildContextOptions): BuiltContext {
   };
 
   const { prompt: basePrompt, tier } = buildSystemPromptDetailed(promptOptions);
-
-  // Append coding instructions if requested or auto-detected
   const systemPromptParts = [basePrompt];
+
+  // Coding guidelines
   if (options.isCodingMode) {
     systemPromptParts.push(`\n${BRAVIEN_IDENTITY.codingGuidelines}`);
   }
 
-  // Append Tool Results block if present
+  // Verified Evidence block (Web + Docs)
+  if (options.evidenceFormatted?.trim()) {
+    systemPromptParts.push(`\n${options.evidenceFormatted.trim()}`);
+  }
+
+  // Plan Execution Summary if present
+  if (options.planSummary?.trim()) {
+    systemPromptParts.push(
+      `\nTask Plan Execution Progress:\n${options.planSummary.trim()}`,
+    );
+  }
+
+  // Tool Execution Results block if present
   if (options.toolResultsFormatted?.trim()) {
     systemPromptParts.push(
       `\nTool Execution Results (use these facts directly in your answer):\n${options.toolResultsFormatted.trim()}`,
     );
   }
 
-  // Append Prior Conversation Summary if present
+  // Prior Conversation Summary if present
   if (options.conversationSummary?.trim()) {
     systemPromptParts.push(
       `\n${options.conversationSummary.trim()}`,
@@ -74,11 +88,11 @@ export function buildContext(options: BuildContextOptions): BuiltContext {
   const finalSystemPrompt = systemPromptParts.join("\n\n");
   const systemTokens = estimateTokens(finalSystemPrompt);
 
-  // Reserve tokens for model reply (minimum 512, maximum 2048)
+  // Reserve tokens for model output (minimum 512, maximum 2048)
   const reservedOutputTokens = Math.min(2048, Math.max(512, Math.floor(contextWindow * 0.2)));
   const availableHistoryTokens = Math.max(200, contextWindow - systemTokens - reservedOutputTokens);
 
-  // Budget conversation messages backwards from the most recent
+  // Budget conversation turns backwards from the most recent
   const budgetedMessages: AIMessage[] = [];
   let currentHistoryTokens = 0;
 

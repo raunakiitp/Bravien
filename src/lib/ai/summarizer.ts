@@ -8,24 +8,41 @@ import type { AIMessage } from "@/types";
 export function summarizeMessagesLocally(messages: AIMessage[]): string {
   if (messages.length === 0) return "";
 
-  const userRequirements: string[] = [];
-  const assistantKeyPoints: string[] = [];
+  const goalsAndRequests: string[] = [];
+  const decisionsAndFacts: string[] = [];
+  const constraintsAndRules: string[] = [];
 
   for (const m of messages) {
+    const text = m.content.trim();
     if (m.role === "user") {
-      const line = m.content.split("\n")[0].trim().slice(0, 100);
-      if (line) userRequirements.push(`- User discussed: ${line}`);
+      const firstLine = text.split("\n")[0].slice(0, 120);
+      if (/\b(?:must|don't|do not|never|always|rule|constraint)\b/i.test(text)) {
+        constraintsAndRules.push(`- Constraint: ${firstLine}`);
+      } else {
+        goalsAndRequests.push(`- Goal/Request: ${firstLine}`);
+      }
     } else if (m.role === "assistant") {
-      const line = m.content.split("\n")[0].trim().slice(0, 100);
-      if (line) assistantKeyPoints.push(`- Assistant noted: ${line}`);
+      const firstLine = text.split("\n")[0].slice(0, 120);
+      if (/\b(?:decided|agreed|implemented|verified|fixed|chosen)\b/i.test(text)) {
+        decisionsAndFacts.push(`- Decision/Result: ${firstLine}`);
+      } else {
+        decisionsAndFacts.push(`- Key Point: ${firstLine}`);
+      }
     }
   }
 
-  return [
-    "Prior Conversation Context Summary:",
-    ...userRequirements.slice(-5),
-    ...assistantKeyPoints.slice(-5),
-  ].join("\n");
+  const sections: string[] = ["Prior Conversation Context Summary:"];
+  if (constraintsAndRules.length) {
+    sections.push("Active Constraints & Guidelines:\n" + constraintsAndRules.slice(-4).join("\n"));
+  }
+  if (goalsAndRequests.length) {
+    sections.push("Prior Goals & Topics:\n" + goalsAndRequests.slice(-4).join("\n"));
+  }
+  if (decisionsAndFacts.length) {
+    sections.push("Key Decisions & Findings:\n" + decisionsAndFacts.slice(-4).join("\n"));
+  }
+
+  return sections.join("\n\n");
 }
 
 /**

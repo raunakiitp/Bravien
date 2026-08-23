@@ -22,6 +22,8 @@ export interface StreamChatOptions {
   projectInstructions?: string | null;
   projectDocumentsContext?: string | null;
   toolResultsFormatted?: string | null;
+  evidenceFormatted?: string | null;
+  planSummary?: string | null;
   conversationSummary?: string | null;
   isCodingMode?: boolean;
   memories?: string[];
@@ -82,6 +84,8 @@ export async function* streamChat(
     projectInstructions: options.projectInstructions,
     projectDocumentsContext: options.projectDocumentsContext,
     toolResultsFormatted: options.toolResultsFormatted,
+    evidenceFormatted: options.evidenceFormatted,
+    planSummary: options.planSummary,
     conversationSummary: options.conversationSummary,
     isCodingMode: options.isCodingMode,
     memories: options.memories,

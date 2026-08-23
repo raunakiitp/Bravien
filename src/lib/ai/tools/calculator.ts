@@ -151,6 +151,12 @@ export const calculatorTool: ToolDefinition<typeof calculatorSchema> = {
   name: "calculator",
   description:
     "Evaluate standard arithmetic and mathematical expressions safely (supports +, -, *, /, %, ^, sqrt, abs, sin, cos, tan, log, ln, round, pi, e).",
+  category: "MATH",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: false,
+  mutatesData: false,
+  executionTimeoutMs: 2000,
   schema: calculatorSchema,
   execute: async ({ expression }) => {
     try {

@@ -6,6 +6,7 @@ import { searchConversationsTool } from "./conversations";
 import { getDocumentContentTool, searchDocumentsTool } from "./documents";
 import { searchMemoriesTool } from "./memories";
 import { timeTool } from "./time";
+import { fetchWebPageTool, searchWebTool } from "./web";
 
 export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
   [calculatorTool.name]: calculatorTool,
@@ -14,16 +15,29 @@ export const BUILTIN_TOOLS: Record<string, ToolDefinition> = {
   [searchDocumentsTool.name]: searchDocumentsTool,
   [getDocumentContentTool.name]: getDocumentContentTool,
   [searchConversationsTool.name]: searchConversationsTool,
+  [searchWebTool.name]: searchWebTool,
+  [fetchWebPageTool.name]: fetchWebPageTool,
 };
 
 export function getTool(name: string): ToolDefinition | null {
   return BUILTIN_TOOLS[name] ?? null;
 }
 
-export function listTools(): Array<{ name: string; description: string }> {
+export function listTools(): Array<{
+  name: string;
+  description: string;
+  category: string;
+  riskLevel: string;
+  requiresNetwork: boolean;
+  requiresProjectScope: boolean;
+}> {
   return Object.values(BUILTIN_TOOLS).map((t) => ({
     name: t.name,
     description: t.description,
+    category: t.category,
+    riskLevel: t.riskLevel,
+    requiresNetwork: Boolean(t.requiresNetwork),
+    requiresProjectScope: Boolean(t.requiresProjectScope),
   }));
 }
 

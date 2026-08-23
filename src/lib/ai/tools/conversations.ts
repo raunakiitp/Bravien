@@ -10,6 +10,12 @@ const searchConversationsSchema = z.object({
 export const searchConversationsTool: ToolDefinition<typeof searchConversationsSchema> = {
   name: "search_conversations",
   description: "Search previous conversations and message history for past discussions or decisions.",
+  category: "CONVERSATION",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: false,
+  mutatesData: false,
+  executionTimeoutMs: 3000,
   schema: searchConversationsSchema,
   execute: async ({ query, limit }, context) => {
     try {

@@ -11,6 +11,12 @@ export const searchMemoriesTool: ToolDefinition<typeof searchMemoriesSchema> = {
   name: "search_memories",
   description:
     "Search through the user's stored persistent memories for preferences, profile facts, workflows, or project instructions.",
+  category: "MEMORY",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: false,
+  mutatesData: false,
+  executionTimeoutMs: 3000,
   schema: searchMemoriesSchema,
   execute: async ({ query, limit }, context) => {
     try {

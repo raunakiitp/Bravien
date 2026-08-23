@@ -8,6 +8,12 @@ const timeSchema = z.object({
 export const timeTool: ToolDefinition<typeof timeSchema> = {
   name: "get_current_time",
   description: "Get the current local date, time, day of the week, and timezone.",
+  category: "SYSTEM",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: false,
+  mutatesData: false,
+  executionTimeoutMs: 1000,
   schema: timeSchema,
   execute: async ({ timeZone }) => {
     const now = new Date();

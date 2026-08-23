@@ -12,6 +12,12 @@ export const searchDocumentsTool: ToolDefinition<typeof searchDocumentsSchema> =
   name: "search_documents",
   description:
     "Search through project documents, PDFs, notes, and uploaded files for relevant text sections and evidence.",
+  category: "DOCUMENT",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: true,
+  mutatesData: false,
+  executionTimeoutMs: 5000,
   schema: searchDocumentsSchema,
   execute: async ({ query, limit }, context) => {
     if (!context.projectId) {
@@ -68,6 +74,12 @@ const getDocumentContentSchema = z.object({
 export const getDocumentContentTool: ToolDefinition<typeof getDocumentContentSchema> = {
   name: "get_document_content",
   description: "Retrieve extracted text and metadata of a specific file in the active project.",
+  category: "DOCUMENT",
+  riskLevel: "LOW",
+  requiresNetwork: false,
+  requiresProjectScope: true,
+  mutatesData: false,
+  executionTimeoutMs: 4000,
   schema: getDocumentContentSchema,
   execute: async ({ filename }, context) => {
     if (!context.projectId) {
