@@ -33,17 +33,19 @@ export function normalizeEvidence(items: EvidenceItem[]): EvidenceItem[] {
   const deduped = new Map<string, EvidenceItem>();
 
   for (const item of items) {
-    const key = `${item.sourceType}:${item.url || item.title || item.sourceId}`;
+    const rawContent = item.content ?? (item as any).snippet ?? "";
+    const key = `${item.sourceType}:${item.url || item.title || item.sourceId || rawContent.slice(0, 30)}`;
     if (!deduped.has(key)) {
       deduped.set(key, {
         ...item,
-        content: item.content.slice(0, MAX_EVIDENCE_CONTENT_LENGTH).trim(),
+        content: rawContent.slice(0, MAX_EVIDENCE_CONTENT_LENGTH).trim(),
+        confidence: item.confidence ?? 1.0,
       });
     }
   }
 
   return Array.from(deduped.values())
-    .sort((a, b) => b.confidence - a.confidence)
+    .sort((a, b) => (b.confidence ?? 1.0) - (a.confidence ?? 1.0))
     .slice(0, MAX_EVIDENCE_ITEMS);
 }
 

@@ -21,6 +21,7 @@ export interface StreamChatOptions {
   userPreferences?: string | null;
   projectInstructions?: string | null;
   projectDocumentsContext?: string | null;
+  agentStateSummary?: string | null;
   toolResultsFormatted?: string | null;
   evidenceFormatted?: string | null;
   planSummary?: string | null;
@@ -83,6 +84,7 @@ export async function* streamChat(
     userPreferences: options.userPreferences,
     projectInstructions: options.projectInstructions,
     projectDocumentsContext: options.projectDocumentsContext,
+    agentStateSummary: options.agentStateSummary,
     toolResultsFormatted: options.toolResultsFormatted,
     evidenceFormatted: options.evidenceFormatted,
     planSummary: options.planSummary,

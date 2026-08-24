@@ -8,6 +8,7 @@ export interface BuildContextOptions {
   userPreferences?: string | null;
   projectInstructions?: string | null;
   projectDocumentsContext?: string | null;
+  agentStateSummary?: string | null;
   toolResultsFormatted?: string | null;
   evidenceFormatted?: string | null;
   planSummary?: string | null;
@@ -33,10 +34,11 @@ function estimateTokens(text: string): number {
  * Prioritization order:
  * 1. Protected System instructions & Bravien identity
  * 2. Protected Current user request
- * 3. Verified Evidence (Web research & Project documents)
- * 4. Plan & Tool results
- * 5. Relevant memories
- * 6. Recent conversation history (with summary fallback)
+ * 3. Active Agent State
+ * 4. Verified Evidence (Web research & Project documents)
+ * 5. Plan & Tool results
+ * 6. Relevant memories
+ * 7. Recent conversation history (with summary fallback)
  */
 export function buildContext(options: BuildContextOptions): BuiltContext {
   const contextWindow = options.contextWindow ?? 32768;
@@ -57,6 +59,11 @@ export function buildContext(options: BuildContextOptions): BuiltContext {
   // Coding guidelines
   if (options.isCodingMode) {
     systemPromptParts.push(`\n${BRAVIEN_IDENTITY.codingGuidelines}`);
+  }
+
+  // Active Agent State
+  if (options.agentStateSummary?.trim()) {
+    systemPromptParts.push(`\n${options.agentStateSummary.trim()}`);
   }
 
   // Verified Evidence block (Web + Docs)

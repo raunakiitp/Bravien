@@ -62,6 +62,10 @@ export interface UiMessage {
   };
   /** Text pulled out of attached documents, sent with the message but shown apart. */
   attachments?: Array<{ name: string; characters: number }>;
+  /** Real-time agent execution events during the turn. */
+  agentEvents?: Array<{ eventType: string; message: string }>;
+  /** Citations retrieved for this turn. */
+  citations?: Array<{ title: string; url: string; snippet?: string }>;
   createdAt: number;
 }
 
@@ -191,6 +195,8 @@ export function useChat(options: UseChatOptions = {}) {
       let received = "";
       let sawComplete = false;
       let failure: TurnError | null = null;
+      const agentEvents: Array<{ eventType: string; message: string }> = [];
+      const citations: Array<{ title: string; url: string; snippet?: string }> = [];
 
       try {
         const response = await fetch("/api/chat", {
@@ -218,25 +224,19 @@ export function useChat(options: UseChatOptions = {}) {
 
         if (!response.ok) {
           const error = await apiErrorFrom(response);
-          patch(placeholderId, {
-            status: "failed",
-            error: { code: error.code, message: error.message },
-          });
+          failure = { code: error.code, message: error.message };
           return;
         }
         if (!response.body) {
-          patch(placeholderId, {
-            status: "failed",
-            error: {
-              code: "NO_STREAM",
-              message: "The server accepted the request but sent no stream.",
-            },
-          });
+          failure = {
+            code: "EMPTY_BODY",
+            message: "The server did not send a response stream.",
+          };
           return;
         }
 
         for await (const payload of readFrames(response.body, controller.signal)) {
-          if (payload === "[DONE]") break;
+          if (controller.signal.aborted) break;
 
           let frame: ChatStreamFrame;
           try {
@@ -260,6 +260,28 @@ export function useChat(options: UseChatOptions = {}) {
                   frame.title,
                 );
               }
+              break;
+            }
+            case "agent_event": {
+              agentEvents.push({
+                eventType: frame.eventType,
+                message: frame.message,
+              });
+              patch(placeholderId, {
+                agentEvents: [...agentEvents],
+                status: "streaming",
+              });
+              break;
+            }
+            case "citation": {
+              citations.push({
+                title: frame.title,
+                url: frame.url,
+                snippet: frame.snippet,
+              });
+              patch(placeholderId, {
+                citations: [...citations],
+              });
               break;
             }
             case "content_delta": {

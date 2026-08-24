@@ -295,6 +295,54 @@ function AssistantTurn({
         <TurnError error={message.error} onRetry={onRegenerate} />
       ) : (
         <>
+          {/* Agent Activity & Execution Events */}
+          {message.agentEvents && message.agentEvents.length > 0 && (
+            <div className="mb-2.5">
+              {streaming ? (
+                <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary animate-pulse">
+                  <span className="size-1.5 rounded-full bg-primary" />
+                  <span>{message.agentEvents[message.agentEvents.length - 1].message}</span>
+                </div>
+              ) : (
+                <details className="group/events text-[11px] text-muted-foreground">
+                  <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-muted/40 font-mono text-[10px]">
+                    <span className="text-emerald-500 font-bold">✓</span> Agent execution ({message.agentEvents.length} events)
+                  </summary>
+                  <div className="mt-1 pl-3 border-l border-border/60 space-y-0.5 text-[11px] text-muted-foreground/80">
+                    {message.agentEvents.map((ev, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <span className="text-muted-foreground/40 text-[9px]">•</span>
+                        <span>{ev.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+
+          {/* Citations Badges */}
+          {message.citations && message.citations.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mr-1">
+                Sources:
+              </span>
+              {message.citations.map((c, i) => (
+                <a
+                  key={i}
+                  href={c.url.startsWith("http") ? c.url : undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={c.snippet}
+                  className="inline-flex items-center gap-1 rounded border border-border/80 bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <span className="font-mono text-primary font-bold">[{i + 1}]</span>
+                  <span className="max-w-[140px] truncate">{c.title}</span>
+                </a>
+              ))}
+            </div>
+          )}
+
           {streaming && empty ? (
             <p
               className="streaming-cursor text-sm text-muted-foreground"

@@ -257,147 +257,6 @@ export async function POST(request: Request) {
     ? await loadPersonalisation(userId, activeProjectId, lastUser?.content)
     : { instructions: null, projectInstructions: null, memories: [] as string[] };
 
-  // 1. Intent Routing
-  let intentResult: import("@/lib/ai/router").IntentResult = {
-    intent: "GENERAL_CHAT",
-    confidence: 1.0,
-    requiresPlanning: false,
-    requiresWeb: false,
-    candidateTools: [],
-    entities: {},
-    reasoning: "Default conversational turn",
-  };
-  if (lastUser?.content) {
-    try {
-      const { routeIntent } = await import("@/lib/ai/router");
-      intentResult = routeIntent(lastUser.content, {
-        hasActiveProject: Boolean(activeProjectId),
-        hasWebAccess: isFeatureEnabled("web_search"),
-      });
-    } catch {
-      // fallback to general chat
-    }
-  }
-
-  // 2. Task Planning (for complex / multi-step requests)
-  let planSummary: string | null = null;
-  const plannedEvidence: string[] = [];
-  if (intentResult.requiresPlanning && lastUser?.content) {
-    try {
-      const { createPlan, executePlan } = await import("@/lib/ai/planner");
-      const plan = createPlan(lastUser.content, intentResult, { projectId: activeProjectId });
-      const planExec = await executePlan(
-        plan,
-        {
-          userId: userId ?? "guest",
-          projectId: activeProjectId,
-          conversationId,
-        },
-        { timeoutMs: 10_000 },
-      );
-      planSummary = planExec.summaryText;
-      plannedEvidence.push(...planExec.evidenceTexts);
-    } catch (planErr) {
-      logger.warn("chat.planning_failed", {
-        error: planErr instanceof Error ? planErr.message : String(planErr),
-      });
-    }
-  }
-
-  // 3. Web Research Workflow
-  let webEvidenceFormatted: string | null = null;
-  const webCitationsList: Array<{ title: string; url: string; snippet: string }> = [];
-  if (
-    isFeatureEnabled("web_search") &&
-    (intentResult.requiresWeb || intentResult.intent === "WEB_RESEARCH") &&
-    lastUser?.content &&
-    !intentResult.requiresPlanning
-  ) {
-    try {
-      const { runResearchWorkflow } = await import("@/lib/ai/research");
-      const research = await runResearchWorkflow(lastUser.content, {
-        maxSearchResults: 3,
-        timeoutMs: 6000,
-      });
-      if (research.formattedEvidence) {
-        webEvidenceFormatted = research.formattedEvidence;
-        webCitationsList.push(...research.citations);
-      }
-    } catch (webErr) {
-      logger.warn("chat.web_research_failed", {
-        error: webErr instanceof Error ? webErr.message : String(webErr),
-      });
-    }
-  }
-
-  // 4. RAG document retrieval if conversation belongs to a project
-  let retrievedContext: string | null = null;
-  let retrievedChunksList: Array<{ filename: string; chunkIndex: number; content: string }> = [];
-  if (canPersist && userId && activeProjectId && lastUser?.content) {
-    try {
-      const { retrieveRelevantContext, formatRetrievedContext } = await import(
-        "@/lib/rag/retrieval"
-      );
-      const hits = await retrieveRelevantContext({
-        userId,
-        projectId: activeProjectId,
-        query: lastUser.content,
-        limit: 4,
-      });
-      if (hits.length > 0) {
-        retrievedContext = formatRetrievedContext(hits);
-        retrievedChunksList = hits.map((h) => ({
-          filename: h.filename,
-          chunkIndex: h.chunkIndex,
-          content: h.content,
-        }));
-      }
-    } catch (err) {
-      logger.error("rag.retrieve_failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // 5. Tool execution loop (for direct tool requests like math, time, explicit search)
-  let toolResultsFormatted: string | null = null;
-  if (lastUser?.content && !intentResult.requiresPlanning && !intentResult.requiresWeb) {
-    try {
-      const { runToolLoop } = await import("@/lib/ai/tools/loop");
-      const summary = await runToolLoop(
-        lastUser.content,
-        {
-          userId: userId ?? "guest",
-          projectId: activeProjectId,
-          conversationId,
-        },
-        { maxIterations: 3, timeoutMs: 8000 },
-      );
-      if (summary.combinedFormattedOutput) {
-        toolResultsFormatted = summary.combinedFormattedOutput;
-      }
-    } catch (toolErr) {
-      logger.warn("tools.loop_failed", {
-        error: toolErr instanceof Error ? toolErr.message : String(toolErr),
-      });
-    }
-  }
-
-  // Combine planned evidence with web evidence
-  const combinedEvidence = [webEvidenceFormatted, ...plannedEvidence]
-    .filter(Boolean)
-    .join("\n\n");
-
-  // Detect coding intent
-  const isCodingMode = Boolean(
-    intentResult.intent === "CODING" ||
-      intentResult.intent === "DEBUGGING" ||
-      (lastUser?.content &&
-        /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
-          lastUser.content,
-        )),
-  );
-
   const encoder = new TextEncoder();
   const persistedConversationId = conversationId;
   const persistTarget = canPersist ? persistedConversationId : null;
@@ -420,37 +279,17 @@ export async function POST(request: Request) {
           ...(conversationTitle ? { title: conversationTitle } : {}),
         });
 
-        // Send citation frames for web search results
-        for (const citation of webCitationsList) {
-          send({
-            kind: "citation",
-            title: citation.title,
-            url: citation.url,
-            snippet: citation.snippet,
-          });
-        }
+        const { runUnifiedAgentTurn } = await import("@/lib/ai/agent-orchestrator");
 
-        // Send citation frames for retrieved reference docs
-        for (const chunk of retrievedChunksList) {
-          send({
-            kind: "citation",
-            title: chunk.filename,
-            url: `#${chunk.filename}-p${chunk.chunkIndex + 1}`,
-            snippet: chunk.content.slice(0, 150) + "...",
-          });
-        }
-
-        for await (const chunk of streamChat({
+        for await (const chunk of runUnifiedAgentTurn({
+          userId: userId ?? undefined,
+          projectId: activeProjectId,
+          conversationId,
           messages,
           modelId,
           signal: abort.signal,
           userPreferences: personalisation.instructions,
           projectInstructions: personalisation.projectInstructions,
-          projectDocumentsContext: retrievedContext,
-          toolResultsFormatted,
-          evidenceFormatted: combinedEvidence || null,
-          planSummary,
-          isCodingMode,
           memories: personalisation.memories,
         })) {
           if (chunk.kind === "content_delta") assistantText += chunk.delta;

@@ -65,7 +65,7 @@ const DEBUG_PATTERNS = [
 const WEB_PATTERNS = [
   /\b(?:search the web for|look up online|latest news on|current weather|recent updates on|what happened today with|who won the|release notes for|what changed in)\b/i,
   /\b(?:search online|find on the web|browse the web for|google for)\b/i,
-  /\b(?:today's news|latest release of|current version of)\b/i,
+  /\b(?:today's news|latest release of|current version of|what are the latest|latest features of|latest\s+\w+\s+features)\b/i,
 ];
 
 const COMPARISON_PATTERNS = [
@@ -187,7 +187,10 @@ export function routeIntent(
     (lower.startsWith("search documents for") ||
       lower.startsWith("search files for") ||
       lower.includes("in the project documents") ||
-      lower.includes("according to the uploaded file") ||
+      lower.includes("according to the uploaded") ||
+      lower.includes("uploaded document") ||
+      lower.includes("uploaded system document") ||
+      lower.includes("what does the uploaded") ||
       lower.includes("what does the document say about"))
   ) {
     return {

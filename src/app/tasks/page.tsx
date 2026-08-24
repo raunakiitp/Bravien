@@ -6,18 +6,22 @@ import {
   ArrowLeft,
   CheckCircle2,
   Clock,
-  ExternalLink,
   FolderKanban,
   ListTodo,
   Loader2,
   Play,
   Plus,
-  RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
   XCircle,
   AlertCircle,
   Activity,
+  Cpu,
+  ShieldAlert,
+  Check,
+  X,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -30,6 +34,7 @@ interface TaskStepItem {
   title: string;
   description?: string | null;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+  retryCount?: number;
   toolName?: string | null;
   toolResult?: { output?: string; [key: string]: unknown } | null;
   error?: string | null;
@@ -59,16 +64,40 @@ interface ActivityItem {
   task?: { title: string } | null;
 }
 
+interface ActionProposalItem {
+  id: string;
+  actionType: string;
+  description: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED";
+  requiresConfirmation: boolean;
+  createdAt: string;
+}
+
+interface AgentStateItem {
+  id: string;
+  goal: string;
+  status: string;
+  currentStep?: number | null;
+  constraints: string[];
+  decisions: string[];
+  completedActions: string[];
+  actionProposals?: ActionProposalItem[];
+  evidenceRefs?: Array<{ title: string; url?: string; sourceType: string }>;
+  updatedAt: string;
+}
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [activities, setActivities] = useState<ActivityItem[]>([]);
+  const [agentState, setAgentState] = useState<AgentStateItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState(false);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [isCreating, setIsCreating] = useState(false);
-  const [activeTab, setActiveTab] = useState<"tasks" | "activity">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "agent-state" | "activity">("tasks");
 
   // Create form state
   const [newTitle, setNewTitle] = useState("");
@@ -106,6 +135,18 @@ export default function TasksPage() {
     }
   }, []);
 
+  const fetchAgentState = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agent/state");
+      if (res.ok) {
+        const data = await res.json();
+        setAgentState(data.state);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const loadTaskDetails = useCallback(async (taskId: string) => {
     try {
       const res = await fetch(`/api/tasks/${taskId}`);
@@ -121,7 +162,8 @@ export default function TasksPage() {
   useEffect(() => {
     void fetchTasks();
     void fetchActivities();
-  }, [fetchTasks, fetchActivities]);
+    void fetchAgentState();
+  }, [fetchTasks, fetchActivities, fetchAgentState]);
 
   async function handleCreateTask(e: React.FormEvent) {
     e.preventDefault();
@@ -155,6 +197,7 @@ export default function TasksPage() {
       await fetchTasks();
       setSelectedTask(task);
       void fetchActivities();
+      void fetchAgentState();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error creating task");
     } finally {
@@ -185,10 +228,53 @@ export default function TasksPage() {
       await loadTaskDetails(taskId);
       await fetchTasks();
       void fetchActivities();
+      void fetchAgentState();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Execution failed");
     } finally {
       setExecuting(false);
+    }
+  }
+
+  async function handleResumeTask(taskId: string) {
+    setExecuting(true);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error?.message || "Resume failed");
+      }
+
+      const { result } = await res.json();
+      toast.success(`Task resumed (status: ${result.status})`);
+      await loadTaskDetails(taskId);
+      await fetchTasks();
+      void fetchActivities();
+      void fetchAgentState();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to resume task");
+    } finally {
+      setExecuting(false);
+    }
+  }
+
+  async function handleConfirmAction(proposalId: string, approve: boolean) {
+    try {
+      const endpoint = approve
+        ? `/api/agent/actions/${proposalId}/confirm`
+        : `/api/agent/actions/${proposalId}/reject`;
+      const res = await fetch(endpoint, { method: "POST" });
+      if (res.ok) {
+        toast.success(approve ? "Action approved" : "Action rejected");
+        void fetchAgentState();
+        void fetchActivities();
+      }
+    } catch {
+      toast.error("Failed to process confirmation");
     }
   }
 
@@ -229,7 +315,7 @@ export default function TasksPage() {
               <FolderKanban className="h-5 w-5 text-primary" /> Autonomous Tasks &amp; Workspaces
             </h1>
             <p className="text-xs text-muted-foreground">
-              Bounded autonomous execution, web research pipelines, and activity tracking.
+              Bounded autonomous execution, agent memory state, and activity tracking.
             </p>
           </div>
         </div>
@@ -244,6 +330,18 @@ export default function TasksPage() {
               )}
             >
               Tasks ({tasks.length})
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab("agent-state");
+                void fetchAgentState();
+              }}
+              className={cn(
+                "px-3 py-1 text-xs font-medium rounded-md transition-colors",
+                activeTab === "agent-state" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Agent State
             </button>
             <button
               onClick={() => setActiveTab("activity")}
@@ -263,7 +361,141 @@ export default function TasksPage() {
       </header>
 
       {/* Main Content Area */}
-      {activeTab === "activity" ? (
+      {activeTab === "agent-state" ? (
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm space-y-6">
+          <div className="flex items-center justify-between border-b border-border pb-4">
+            <div>
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                <Cpu className="h-5 w-5 text-primary" /> Active Agent State &amp; Memory
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Current goal, active constraints, decisions, and confirmation gates.
+              </p>
+            </div>
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase",
+                agentState?.status === "EXECUTING" && "bg-blue-500/10 text-blue-600 animate-pulse",
+                agentState?.status === "COMPLETED" && "bg-emerald-500/10 text-emerald-600",
+                agentState?.status === "WAITING_CONFIRMATION" && "bg-amber-500/10 text-amber-600",
+                agentState?.status === "IDLE" && "bg-muted text-muted-foreground",
+              )}
+            >
+              {agentState?.status || "IDLE"}
+            </span>
+          </div>
+
+          {agentState ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Left Column: Goal, Constraints, Decisions */}
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border bg-muted/20 p-4">
+                  <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider mb-1">
+                    Current Goal
+                  </h3>
+                  <p className="text-sm font-medium text-foreground">{agentState.goal}</p>
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2">
+                  <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                    Active Constraints ({agentState.constraints.length})
+                  </h3>
+                  {agentState.constraints.length === 0 ? (
+                    <p className="text-xs text-muted-foreground italic">No constraints registered.</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {agentState.constraints.map((c, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-primary font-bold">•</span> {c}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2">
+                  <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                    Key Decisions &amp; Findings ({agentState.decisions.length})
+                  </h3>
+                  {agentState.decisions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground italic">No decisions recorded.</p>
+                  ) : (
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {agentState.decisions.map((d, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-emerald-500 font-bold">✓</span> {d}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Pending Confirmations & Completed Actions */}
+              <div className="space-y-4">
+                {agentState.actionProposals && agentState.actionProposals.length > 0 && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                    <h3 className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <ShieldAlert className="h-4 w-4" /> Pending Confirmation Gates
+                    </h3>
+                    <div className="space-y-2">
+                      {agentState.actionProposals.map((p) => (
+                        <div
+                          key={p.id}
+                          className="rounded-md border border-border bg-background p-3 text-xs flex items-center justify-between gap-3"
+                        >
+                          <div>
+                            <span className="font-semibold text-foreground">{p.actionType}</span>
+                            <p className="text-muted-foreground text-[11px] mt-0.5">{p.description}</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleConfirmAction(p.id, true)}
+                              className="h-7 px-2 text-emerald-600 hover:bg-emerald-500/10"
+                            >
+                              <Check className="h-3.5 w-3.5 mr-1" /> Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleConfirmAction(p.id, false)}
+                              className="h-7 px-2 text-rose-600 hover:bg-rose-500/10"
+                            >
+                              <X className="h-3.5 w-3.5 mr-1" /> Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2">
+                  <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                    Completed Actions ({agentState.completedActions.length})
+                  </h3>
+                  {agentState.completedActions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground italic">No actions completed yet.</p>
+                  ) : (
+                    <ul className="space-y-1.5 text-xs text-muted-foreground">
+                      {agentState.completedActions.map((a, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                          <span>{a}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-8 text-center">No active agent state found.</p>
+          )}
+        </div>
+      ) : activeTab === "activity" ? (
         <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
           <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
             <Activity className="h-4 w-4 text-primary" /> System Activity Log
@@ -404,6 +636,18 @@ export default function TasksPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {selectedTask.status === "FAILED" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={executing}
+                        onClick={() => handleResumeTask(selectedTask.id)}
+                        className="gap-1.5"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" /> Resume Task
+                      </Button>
+                    )}
+
                     <Button
                       size="sm"
                       disabled={executing || selectedTask.status === "RUNNING"}
@@ -431,7 +675,7 @@ export default function TasksPage() {
                 {/* Execution Steps */}
                 <div>
                   <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-                    <ListTodo className="h-4 w-4 text-primary" /> Execution Steps
+                    <ListTodo className="h-4 w-4 text-primary" /> Execution Steps &amp; Checkpoints
                   </h3>
                   {!selectedTask.steps || selectedTask.steps.length === 0 ? (
                     <p className="text-xs text-muted-foreground italic py-3">
@@ -460,11 +704,18 @@ export default function TasksPage() {
                               )}
                               Step {step.stepNumber}: {step.title}
                             </span>
-                            {step.toolName && (
-                              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
-                                tool: {step.toolName}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5">
+                              {step.retryCount ? (
+                                <span className="rounded bg-amber-500/10 text-amber-600 px-1.5 py-0.5 text-[10px]">
+                                  retried ({step.retryCount})
+                                </span>
+                              ) : null}
+                              {step.toolName && (
+                                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+                                  tool: {step.toolName}
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {step.description && (
                             <p className="text-muted-foreground">{step.description}</p>
