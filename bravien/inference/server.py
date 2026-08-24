@@ -608,6 +608,16 @@ def create_app(
         finally:
             state.release()
 
+    @app.post("/v1/warmup")
+    def warmup() -> dict[str, Any]:
+        """Warm up the model runtime with a minimal generation."""
+        engine = state.require()
+        state.acquire()
+        try:
+            return engine.warmup()
+        finally:
+            state.release()
+
     # ----------------------------------------------------------- error shaping
 
     @app.exception_handler(HTTPException)
