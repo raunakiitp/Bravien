@@ -26,6 +26,10 @@ import { classifyActionRisk } from "./action-proposal";
 import { promoteStateToPersistentMemory } from "./memory-promotion";
 import { streamChat } from "./orchestrator";
 import { logActivity } from "@/lib/tasks/service";
+import { evaluateInferenceGate, type InferenceGateDecision } from "./inference-gate";
+import { inferenceCache } from "./inference-cache";
+import { efficiencyTracker } from "./efficiency";
+import { filterRelevantMemories, compressToolResult, estimateOutputBudget } from "./context-optimizer";
 import type { AIMessage, AIStreamChunk, AgentEventType } from "@/types";
 
 export type ExecutionMode =
@@ -176,12 +180,103 @@ export async function* runUnifiedAgentTurn(
     }
   }
 
-  // 3. Mode Selection & Routing
+  // 3. Inference Gating & Routing
   const hasWeb = isFeatureEnabled("web_search");
+  const gate = evaluateInferenceGate(userText, {
+    hasActiveProject: Boolean(projectId),
+    hasWebAccess: hasWeb,
+  });
+
   const decision = determineExecutionMode(userText, {
     hasActiveProject: Boolean(projectId),
     hasWebAccess: hasWeb,
   });
+
+  // Direct identity/capability shortcut
+  if (gate.mode === "DETERMINISTIC" && gate.directResponse) {
+    yield {
+      kind: "agent_event",
+      eventType: "agent_started",
+      message: "Processing query via direct deterministic shortcut",
+    };
+    yield {
+      kind: "agent_event",
+      eventType: "routing",
+      message: `Direct shortcut: ${gate.reason}`,
+      metadata: { mode: "DIRECT", reason: gate.reason },
+    };
+    yield {
+      kind: "content_delta",
+      delta: gate.directResponse,
+    };
+    yield {
+      kind: "agent_event",
+      eventType: "agent_completed",
+      message: "Direct response completed",
+      metadata: { mode: "DIRECT" },
+    };
+    efficiencyTracker.recordRequest({ avoidedModel: true, isDeterministic: true });
+    return;
+  }
+
+  // Detect Coding Mode & Generation Profile
+  const isCodingMode = Boolean(
+    decision.intentResult.intent === "CODING" ||
+      decision.intentResult.intent === "DEBUGGING" ||
+      /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
+        userText,
+      ),
+  );
+
+  const profile = isCodingMode
+    ? "CODE"
+    : decision.mode === "TOOL" || decision.mode === "DIRECT"
+      ? "FAST"
+      : "BALANCED";
+
+  // Check Response Cache for identical safe requests
+  const isCacheable = inferenceCache.isCacheable(userText, {
+    requiresWeb: decision.intentResult.requiresWeb,
+    isAction: decision.mode === "WAITING_CONFIRMATION",
+  });
+
+  const cacheKey = userId
+    ? inferenceCache.generateKey({
+        userId,
+        projectId,
+        query: userText,
+        profile,
+      })
+    : null;
+
+  if (isCacheable && cacheKey && userId) {
+    const cachedResponse = inferenceCache.get(cacheKey, userId);
+    if (cachedResponse) {
+      yield {
+        kind: "agent_event",
+        eventType: "agent_started",
+        message: "Serving response from cache",
+      };
+      yield {
+        kind: "agent_event",
+        eventType: "routing",
+        message: "Cache hit: reusing verified local response",
+        metadata: { mode: decision.mode },
+      };
+      yield {
+        kind: "content_delta",
+        delta: cachedResponse,
+      };
+      yield {
+        kind: "agent_event",
+        eventType: "agent_completed",
+        message: "Cached turn completed",
+        metadata: { mode: decision.mode },
+      };
+      efficiencyTracker.recordRequest({ avoidedModel: true, isCacheHit: true });
+      return;
+    }
+  }
 
   yield {
     kind: "agent_event",
@@ -323,7 +418,7 @@ export async function* runUnifiedAgentTurn(
           { maxIterations: 3, timeoutMs: 8000 },
         );
         if (summary.combinedFormattedOutput) {
-          toolResultsFormatted = summary.combinedFormattedOutput;
+          toolResultsFormatted = compressToolResult(summary.combinedFormattedOutput);
         }
       }
 
@@ -340,20 +435,9 @@ export async function* runUnifiedAgentTurn(
     });
   }
 
-  // 5. Detect Coding Mode & Generation Profile
-  const isCodingMode = Boolean(
-    decision.intentResult.intent === "CODING" ||
-      decision.intentResult.intent === "DEBUGGING" ||
-      /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
-        userText,
-      ),
-  );
-
-  const profile = isCodingMode
-    ? "CODE"
-    : decision.mode === "TOOL" || decision.mode === "DIRECT"
-      ? "FAST"
-      : "BALANCED";
+  // Filter memories to only relevant context
+  const filteredMemories = filterRelevantMemories(options.memories ?? [], userText, 3);
+  const outputBudget = estimateOutputBudget(userText, { isCodingMode });
 
   // 6. Inference Stream
   let assistantText = "";
@@ -369,7 +453,7 @@ export async function* runUnifiedAgentTurn(
     evidenceFormatted,
     planSummary,
     isCodingMode,
-    memories: options.memories,
+    memories: filteredMemories,
     maxContextTokens: options.maxContextTokens,
     profile,
   })) {
@@ -378,6 +462,16 @@ export async function* runUnifiedAgentTurn(
     }
     yield chunk;
   }
+
+  // Cache successful responses for safe queries
+  if (isCacheable && cacheKey && userId && assistantText.trim()) {
+    inferenceCache.set(cacheKey, assistantText, { userId, projectId });
+  }
+
+  efficiencyTracker.recordRequest({
+    avoidedModel: false,
+    outputTokens: assistantText.length ? Math.ceil(assistantText.length / 4) : 0,
+  });
 
   // 7. Post-Turn State Synchronization & Checkpoint
   if (userId && activeAgentState) {
