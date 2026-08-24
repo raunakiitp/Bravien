@@ -340,7 +340,7 @@ export async function* runUnifiedAgentTurn(
     });
   }
 
-  // 5. Detect Coding Mode
+  // 5. Detect Coding Mode & Generation Profile
   const isCodingMode = Boolean(
     decision.intentResult.intent === "CODING" ||
       decision.intentResult.intent === "DEBUGGING" ||
@@ -348,6 +348,12 @@ export async function* runUnifiedAgentTurn(
         userText,
       ),
   );
+
+  const profile = isCodingMode
+    ? "CODE"
+    : decision.mode === "TOOL" || decision.mode === "DIRECT"
+      ? "FAST"
+      : "BALANCED";
 
   // 6. Inference Stream
   let assistantText = "";
@@ -365,6 +371,7 @@ export async function* runUnifiedAgentTurn(
     isCodingMode,
     memories: options.memories,
     maxContextTokens: options.maxContextTokens,
+    profile,
   })) {
     if (chunk.kind === "content_delta") {
       assistantText += chunk.delta;

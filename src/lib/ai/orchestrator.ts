@@ -6,7 +6,11 @@
  * errors and never rendered as assistant text (§52).
  */
 
-import { buildContext } from "@/lib/ai/context";
+import {
+  formatModelPrompt,
+  getGenerationConfig,
+  type GenerationProfile,
+} from "@/lib/ai/model-prompt";
 import { getDefaultModelId, getModel } from "@/lib/ai/models";
 import { getProviderForModel, ModelUnavailableError } from "@/lib/ai/providers";
 import type { AIMessage, AIStreamChunk, StreamTextParams } from "@/types";
@@ -30,6 +34,7 @@ export interface StreamChatOptions {
   memories?: string[];
   modelInstructions?: string | null;
   maxContextTokens?: number;
+  profile?: GenerationProfile;
 }
 
 export interface GenerateTitleOptions {
@@ -78,7 +83,15 @@ export async function* streamChat(
     return;
   }
 
-  const built = buildContext({
+  const selectedProfile: GenerationProfile =
+    options.profile ??
+    (options.isCodingMode
+      ? "CODE"
+      : options.toolResultsFormatted
+        ? "FAST"
+        : "BALANCED");
+
+  const formatted = formatModelPrompt({
     messages: options.messages.filter((m) => m.role !== "system"),
     contextWindow: options.maxContextTokens ?? model.contextWindow,
     userPreferences: options.userPreferences,
@@ -91,12 +104,11 @@ export async function* streamChat(
     conversationSummary: options.conversationSummary,
     isCodingMode: options.isCodingMode,
     memories: options.memories,
+    profile: selectedProfile,
   });
 
-  const promptMessages: AIMessage[] = [
-    { role: "system", content: built.systemPrompt },
-    ...built.messages,
-  ];
+  const promptMessages: AIMessage[] = formatted.fullPromptMessages;
+  const genConfig = formatted.generationSettings;
 
   try {
     yield* provider.streamText({
@@ -104,10 +116,18 @@ export async function* streamChat(
       messages: promptMessages,
       tools: options.tools,
       signal: options.signal,
-      maxTokens: model.maxOutputTokens,
+      maxTokens: Math.min(model.maxOutputTokens ?? 2048, genConfig.maxTokens ?? 1024),
+      temperature: genConfig.temperature,
     });
   } catch (err) {
-    if (isAbort(err, options.signal)) return;
+    if (isAbort(err, options.signal)) {
+      yield {
+        kind: "error",
+        code: "MODEL_CANCELLED",
+        message: "Generation was cancelled by client.",
+      };
+      return;
+    }
     const message =
       err instanceof Error ? err.message : "Unexpected streaming failure";
     yield { kind: "error", code: "ORCHESTRATOR_ERROR", message };

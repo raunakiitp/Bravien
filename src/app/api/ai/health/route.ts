@@ -6,6 +6,8 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const health = await modelRuntime.healthCheck({ timeoutMs: 3000 });
+  const metrics = modelRuntime.getMetrics();
+
   return NextResponse.json({
     status: health.status,
     modelLoaded: health.modelLoaded,
@@ -15,5 +17,13 @@ export async function GET() {
     backend: health.backend,
     uptimeSeconds: health.uptimeSeconds,
     runtimeState: modelRuntime.getState(),
+    activeRequests: metrics.activeGenerations,
+    metrics: {
+      requestCount: metrics.requestCount,
+      totalTokensGenerated: metrics.totalTokensGenerated,
+      errorCount: metrics.errorCount,
+      lastLatencyMs: metrics.lastLatencyMs,
+      isWarmedUp: metrics.isWarmedUp,
+    },
   });
 }

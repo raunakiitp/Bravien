@@ -7,6 +7,8 @@
  * - Device detection & model metadata inspection
  * - Warmup & health checks
  * - Token streaming with graceful cancellation
+ * - Structured error handling (MODEL_UNAVAILABLE, MODEL_TIMEOUT, etc.)
+ * - Lightweight inference telemetry (latency, throughput, counters)
  * - Strict error sanitation (no secret leaks)
  */
 
@@ -27,6 +29,27 @@ import type {
 
 export type RuntimeState = "IDLE" | "LOADING" | "READY" | "BUSY" | "FAILED";
 
+export type ModelErrorCode =
+  | "MODEL_UNAVAILABLE"
+  | "MODEL_LOADING"
+  | "MODEL_TIMEOUT"
+  | "MODEL_GENERATION_FAILED"
+  | "MODEL_CONTEXT_TOO_LARGE"
+  | "MODEL_CANCELLED"
+  | "MODEL_BUSY";
+
+export class ModelRuntimeError extends Error {
+  readonly code: ModelErrorCode;
+  readonly status: number;
+
+  constructor(message: string, code: ModelErrorCode, status: number = 500) {
+    super(message);
+    this.name = "ModelRuntimeError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 export interface ModelRuntimeInfo {
   name: string;
   architecture: string;
@@ -37,6 +60,15 @@ export interface ModelRuntimeInfo {
   loaded: boolean;
   vocabSize: number;
   uptimeSeconds?: number;
+}
+
+export interface ModelRuntimeMetrics {
+  requestCount: number;
+  totalTokensGenerated: number;
+  errorCount: number;
+  lastLatencyMs: number;
+  activeGenerations: number;
+  isWarmedUp: boolean;
 }
 
 export interface ModelGenerateParams {
@@ -59,6 +91,16 @@ export class ModelRuntime {
   private maxConcurrency: number = 1;
   private activeGenerations: number = 0;
 
+  // Lightweight inference telemetry
+  private metrics: ModelRuntimeMetrics = {
+    requestCount: 0,
+    totalTokensGenerated: 0,
+    errorCount: 0,
+    lastLatencyMs: 0,
+    activeGenerations: 0,
+    isWarmedUp: false,
+  };
+
   private constructor() {}
 
   public static getInstance(): ModelRuntime {
@@ -80,6 +122,17 @@ export class ModelRuntime {
    */
   public isLoaded(): boolean {
     return this.state === "READY" || this.state === "BUSY";
+  }
+
+  /**
+   * Retrieve current performance and request metrics.
+   */
+  public getMetrics(): ModelRuntimeMetrics {
+    return {
+      ...this.metrics,
+      activeGenerations: this.activeGenerations,
+      isWarmedUp: this.isWarmedUp,
+    };
   }
 
   /**
@@ -217,9 +270,11 @@ export class ModelRuntime {
       }
 
       this.isWarmedUp = true;
+      const duration = Date.now() - t0;
+      this.metrics.lastLatencyMs = duration;
       return {
         warmedUp: true,
-        latencyMs: Date.now() - t0,
+        latencyMs: duration,
         model: info?.name ?? null,
         device: info?.device ?? null,
       };
@@ -241,11 +296,18 @@ export class ModelRuntime {
    */
   public async generate(params: ModelGenerateParams): Promise<string> {
     if (this.activeGenerations >= this.maxConcurrency) {
-      throw new Error("Local model is busy processing maximum concurrent generations.");
+      this.metrics.errorCount++;
+      throw new ModelRuntimeError(
+        "Local model is busy processing maximum concurrent generations.",
+        "MODEL_BUSY",
+        503,
+      );
     }
 
     this.activeGenerations++;
+    this.metrics.requestCount++;
     this.state = "BUSY";
+    const t0 = Date.now();
 
     try {
       const modelId = this.activeModel ?? "bravien-local";
@@ -259,10 +321,26 @@ export class ModelRuntime {
 
       const provider = getLocalProvider();
       if (!provider.completeText) {
-        throw new Error("Local provider does not support completeText");
+        throw new ModelRuntimeError(
+          "Local provider does not support completeText",
+          "MODEL_GENERATION_FAILED",
+          500,
+        );
       }
       const result = await provider.completeText(completeParams);
+      this.metrics.lastLatencyMs = Date.now() - t0;
       return result;
+    } catch (err) {
+      this.metrics.errorCount++;
+      if (params.signal?.aborted) {
+        throw new ModelRuntimeError("Generation cancelled by user", "MODEL_CANCELLED", 499);
+      }
+      if (err instanceof ModelRuntimeError) throw err;
+      throw new ModelRuntimeError(
+        err instanceof Error ? err.message : "Model generation failed",
+        "MODEL_GENERATION_FAILED",
+        500,
+      );
     } finally {
       this.activeGenerations = Math.max(0, this.activeGenerations - 1);
       this.state = this.activeGenerations > 0 ? "BUSY" : "READY";
@@ -276,6 +354,7 @@ export class ModelRuntime {
     params: ModelGenerateParams,
   ): AsyncIterable<AIStreamChunk> {
     if (this.activeGenerations >= this.maxConcurrency) {
+      this.metrics.errorCount++;
       yield {
         kind: "error",
         code: "MODEL_BUSY",
@@ -285,7 +364,9 @@ export class ModelRuntime {
     }
 
     this.activeGenerations++;
+    this.metrics.requestCount++;
     this.state = "BUSY";
+    const t0 = Date.now();
 
     try {
       const modelId = this.activeModel ?? "bravien-local";
@@ -300,10 +381,35 @@ export class ModelRuntime {
       const provider = getLocalProvider();
       for await (const chunk of provider.streamText(streamParams)) {
         if (params.signal?.aborted) {
+          yield {
+            kind: "error",
+            code: "MODEL_CANCELLED",
+            message: "Generation was cancelled by client.",
+          };
           break;
+        }
+
+        if (chunk.kind === "message_complete" && chunk.usage?.outputTokens) {
+          this.metrics.totalTokensGenerated += chunk.usage.outputTokens;
         }
         yield chunk;
       }
+      this.metrics.lastLatencyMs = Date.now() - t0;
+    } catch (err) {
+      this.metrics.errorCount++;
+      if (params.signal?.aborted) {
+        yield {
+          kind: "error",
+          code: "MODEL_CANCELLED",
+          message: "Generation cancelled by user.",
+        };
+        return;
+      }
+      yield {
+        kind: "error",
+        code: "MODEL_GENERATION_FAILED",
+        message: err instanceof Error ? err.message : "Inference generation failed.",
+      };
     } finally {
       this.activeGenerations = Math.max(0, this.activeGenerations - 1);
       this.state = this.activeGenerations > 0 ? "BUSY" : "READY";

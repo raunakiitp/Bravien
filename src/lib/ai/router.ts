@@ -40,7 +40,7 @@ export interface RouterContext {
 }
 
 const MATH_PATTERNS = [
-  /^(?:calculate|compute|evaluate)\s+[0-9+\-*/%^().\s\w]+(?:=[?]?|[?]?)$/i,
+  /^(?:calculate|compute|evaluate):?\s+[0-9+\-*/%^().\s\w]+(?:=[?]?|[?]?)$/i,
   /^what is\s+(?=.*[0-9])[0-9+\-*/%^().\s\w]+(?:=[?]?|[?]?)$/i,
   /^([0-9+\-*/%^().\s]+[+\-*/%^][0-9+\-*/%^().\s]+)$/,
   /\b(?:sqrt|sin|cos|tan|log|factorial)\s*\([0-9.]+\)/i,
