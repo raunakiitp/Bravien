@@ -1,7 +1,7 @@
 /**
  * Canonical Bravien Benchmark Evaluation Dataset (§Phase 13).
  *
- * 51 deterministic test cases spanning 14 intelligence, grounding,
+ * 55 deterministic test cases spanning 14 intelligence, grounding,
  * security, task execution, and efficiency categories.
  */
 

@@ -80,7 +80,7 @@ async function run() {
         break;
       }
     }
-    assert(schemaValid, "All 51 test cases satisfy structured TestCase schema");
+    assert(schemaValid, `All ${BENCHMARK_DATASET.length} test cases satisfy structured TestCase schema`);
 
     // ----------------------------------------------------
     // Part 2: Individual Evaluation Categories
@@ -124,6 +124,9 @@ async function run() {
     const report = await runBenchmark();
 
     assert(report.totalCases === BENCHMARK_DATASET.length, "Benchmark evaluated all dataset cases");
+    assert(report.totalCases === report.passed + report.failed, "Accounting invariant: totalCases === passed + failed");
+    const sumCategoryCases = Object.values(report.categoryScores).reduce((acc, cat) => acc + cat.total, 0);
+    assert(sumCategoryCases === report.totalCases, "Accounting invariant: sum of category cases === totalCases");
     assert(report.passed >= 45, `Benchmark achieved high pass rate (${report.passed}/${report.totalCases})`);
     assert(report.overallStatus === "PASSED", "Overall status is PASSED with 0 security violations");
     assert(typeof report.overallScore === "number" && report.overallScore >= 80, `Overall score is ${report.overallScore}/100`);

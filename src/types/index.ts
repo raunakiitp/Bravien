@@ -55,6 +55,10 @@ export type AgentEventType =
   | "confirmation_required"
   | "waiting_confirmation"
   | "step_completed"
+  | "recovery_started"
+  | "recovery_strategy_selected"
+  | "recovery_completed"
+  | "recovery_failed"
   | "agent_completed"
   | "agent_failed";
 

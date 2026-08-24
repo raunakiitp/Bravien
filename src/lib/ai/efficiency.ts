@@ -1,8 +1,8 @@
 /**
- * Intelligence Efficiency Telemetry & Reporting for Bravien.
+ * Intelligence Efficiency Telemetry & Reporting for Bravien (§Phase 12, Phase 14).
  *
  * Tracks local model call avoidance, deterministic shortcut executions,
- * cache hit rates, average token budgets, and inference latency.
+ * cache hit rates, average token budgets, inference latency, and failure recovery.
  */
 
 export interface EfficiencyMetrics {
@@ -15,6 +15,12 @@ export interface EfficiencyMetrics {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalLatencyMs: number;
+  recoveryAttempts: number;
+  recoverySuccesses: number;
+  recoveryFailures: number;
+  totalRecoveryLatencyMs: number;
+  recoveryByCategory: Record<string, number>;
+  strategiesUsed: Record<string, number>;
 }
 
 export interface EfficiencyReport {
@@ -28,6 +34,15 @@ export interface EfficiencyReport {
   averageOutputTokens: number;
   averageLatencyMs: number;
   totalGeneratedTokens: number;
+  recovery: {
+    recoveryAttempts: number;
+    recoverySuccesses: number;
+    recoveryFailures: number;
+    strategySuccessRate: string;
+    averageRecoveryLatencyMs: number;
+    recoveryByCategory: Record<string, number>;
+    strategiesUsed: Record<string, number>;
+  };
 }
 
 export class EfficiencyTracker {
@@ -43,6 +58,12 @@ export class EfficiencyTracker {
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalLatencyMs: 0,
+    recoveryAttempts: 0,
+    recoverySuccesses: 0,
+    recoveryFailures: 0,
+    totalRecoveryLatencyMs: 0,
+    recoveryByCategory: {},
+    strategiesUsed: {},
   };
 
   private constructor() {}
@@ -92,6 +113,32 @@ export class EfficiencyTracker {
   }
 
   /**
+   * Record a recovery execution attempt.
+   */
+  public recordRecovery(params: {
+    category: string;
+    strategyId: string;
+    success: boolean;
+    latencyMs?: number;
+  }): void {
+    this.metrics.recoveryAttempts++;
+    if (params.success) {
+      this.metrics.recoverySuccesses++;
+    } else {
+      this.metrics.recoveryFailures++;
+    }
+
+    if (typeof params.latencyMs === "number") {
+      this.metrics.totalRecoveryLatencyMs += params.latencyMs;
+    }
+
+    this.metrics.recoveryByCategory[params.category] =
+      (this.metrics.recoveryByCategory[params.category] ?? 0) + 1;
+    this.metrics.strategiesUsed[params.strategyId] =
+      (this.metrics.strategiesUsed[params.strategyId] ?? 0) + 1;
+  }
+
+  /**
    * Generates a structured efficiency report.
    */
   public getEfficiencyReport(): EfficiencyReport {
@@ -106,6 +153,16 @@ export class EfficiencyTracker {
     const averageOutputTokens = Math.round(this.metrics.totalOutputTokens / modelCalls);
     const averageLatencyMs = Math.round(this.metrics.totalLatencyMs / total);
 
+    const recAttempts = Math.max(1, this.metrics.recoveryAttempts);
+    const strategySuccessRate =
+      this.metrics.recoveryAttempts > 0
+        ? `${((this.metrics.recoverySuccesses / recAttempts) * 100).toFixed(1)}%`
+        : "N/A";
+    const averageRecoveryLatencyMs =
+      this.metrics.recoveryAttempts > 0
+        ? Math.round(this.metrics.totalRecoveryLatencyMs / recAttempts)
+        : 0;
+
     return {
       totalRequests: this.metrics.totalRequests,
       modelCalls: this.metrics.modelCalls,
@@ -117,6 +174,15 @@ export class EfficiencyTracker {
       averageOutputTokens,
       averageLatencyMs,
       totalGeneratedTokens: this.metrics.totalOutputTokens,
+      recovery: {
+        recoveryAttempts: this.metrics.recoveryAttempts,
+        recoverySuccesses: this.metrics.recoverySuccesses,
+        recoveryFailures: this.metrics.recoveryFailures,
+        strategySuccessRate,
+        averageRecoveryLatencyMs,
+        recoveryByCategory: { ...this.metrics.recoveryByCategory },
+        strategiesUsed: { ...this.metrics.strategiesUsed },
+      },
     };
   }
 
@@ -131,6 +197,12 @@ export class EfficiencyTracker {
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalLatencyMs: 0,
+      recoveryAttempts: 0,
+      recoverySuccesses: 0,
+      recoveryFailures: 0,
+      totalRecoveryLatencyMs: 0,
+      recoveryByCategory: {},
+      strategiesUsed: {},
     };
   }
 }

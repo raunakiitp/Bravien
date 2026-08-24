@@ -37,6 +37,7 @@ export async function GET() {
       averageInputTokens: efficiency.averageInputTokens,
       averageOutputTokens: efficiency.averageOutputTokens,
       averageLatencyMs: efficiency.averageLatencyMs,
+      recovery: efficiency.recovery,
     },
   });
 }

@@ -6,7 +6,7 @@ async function main() {
   console.log("BRAVIEN BENCHMARK RUNNER (PHASE 13)");
   console.log("==================================================\n");
 
-  console.log("Running 51 evaluation test cases across 14 categories...");
+  console.log("Running 55 evaluation test cases across 14 categories...");
   const report = await runBenchmark();
   const { jsonPath, mdPath } = await writeBenchmarkReports(report);
 

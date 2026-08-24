@@ -25,11 +25,11 @@ import {
 import { classifyActionRisk } from "./action-proposal";
 import { promoteStateToPersistentMemory } from "./memory-promotion";
 import { streamChat } from "./orchestrator";
-import { logActivity } from "@/lib/tasks/service";
 import { evaluateInferenceGate, type InferenceGateDecision } from "./inference-gate";
 import { inferenceCache } from "./inference-cache";
 import { efficiencyTracker } from "./efficiency";
 import { filterRelevantMemories, compressToolResult, estimateOutputBudget } from "./context-optimizer";
+import { analyzeFailure, selectRecoveryStrategy, strategyMemory } from "./recovery";
 import type { AIMessage, AIStreamChunk, AgentEventType } from "@/types";
 
 export type ExecutionMode =
@@ -439,32 +439,164 @@ export async function* runUnifiedAgentTurn(
   const filteredMemories = filterRelevantMemories(options.memories ?? [], userText, 3);
   const outputBudget = estimateOutputBudget(userText, { isCodingMode });
 
-  // 6. Inference Stream
+  // 6. Inference Stream with Failure Analysis & Single Recovery Retry
   let assistantText = "";
-  for await (const chunk of streamChat({
-    messages: options.messages,
-    modelId: options.modelId,
-    signal: options.signal,
-    userPreferences: options.userPreferences,
-    projectInstructions: options.projectInstructions,
-    projectDocumentsContext: retrievedContext,
-    agentStateSummary,
-    toolResultsFormatted,
-    evidenceFormatted,
-    planSummary,
-    isCodingMode,
-    memories: filteredMemories,
-    maxContextTokens: options.maxContextTokens,
-    profile,
-  })) {
-    if (chunk.kind === "content_delta") {
-      assistantText += chunk.delta;
+  let executionSucceeded = false;
+
+  try {
+    for await (const chunk of streamChat({
+      messages: options.messages,
+      modelId: options.modelId,
+      signal: options.signal,
+      userPreferences: options.userPreferences,
+      projectInstructions: options.projectInstructions,
+      projectDocumentsContext: retrievedContext,
+      agentStateSummary,
+      toolResultsFormatted,
+      evidenceFormatted,
+      planSummary,
+      isCodingMode,
+      memories: filteredMemories,
+      maxContextTokens: options.maxContextTokens ?? outputBudget.maxTokens,
+      profile,
+    })) {
+      if (chunk.kind === "content_delta") {
+        assistantText += chunk.delta;
+      }
+      yield chunk;
     }
-    yield chunk;
+    executionSucceeded = true;
+  } catch (err) {
+    logger.warn("agent_orchestrator.inference_failed", {
+      mode: decision.mode,
+      error: err instanceof Error ? err.message : String(err),
+    });
+
+    const failure = analyzeFailure({
+      executionMode: decision.mode,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      modelCalled: true,
+      webResearchAttempted: decision.mode === "RESEARCH",
+      ragAttempted: decision.intentResult.intent === "DOCUMENT_QUERY",
+    });
+
+    if (failure.retryable) {
+      const strat = selectRecoveryStrategy(failure, {
+        currentMode: decision.mode,
+        userQuery: userText,
+        hasActiveProject: Boolean(projectId),
+        hasWebAccess: hasWeb,
+        isCodingMode,
+        attemptCount: 0,
+      });
+
+      if (strat) {
+        yield {
+          kind: "agent_event",
+          eventType: "recovery_started",
+          message: "Attempting bounded recovery strategy",
+          metadata: { failureCategory: failure.category, strategyId: strat.id },
+        };
+        yield {
+          kind: "agent_event",
+          eventType: "recovery_strategy_selected",
+          message: `Selected recovery strategy: ${strat.description}`,
+          metadata: { from: decision.mode, to: strat.targetMode, strategyId: strat.id },
+        };
+
+        const tRecStart = Date.now();
+        let recSuccess = false;
+        try {
+          if (toolResultsFormatted && strat.useDeterministicShortcut) {
+            yield {
+              kind: "content_delta",
+              delta: toolResultsFormatted,
+            };
+            assistantText = toolResultsFormatted;
+            recSuccess = true;
+          } else {
+            for await (const chunk of streamChat({
+              messages: options.messages.slice(-2),
+              modelId: options.modelId,
+              signal: options.signal,
+              userPreferences: options.userPreferences,
+              projectInstructions: options.projectInstructions,
+              projectDocumentsContext: retrievedContext,
+              agentStateSummary,
+              toolResultsFormatted,
+              evidenceFormatted,
+              planSummary,
+              isCodingMode,
+              memories: [],
+              maxContextTokens: strat.maxTokens,
+              profile: strat.fallbackProfile ?? "FAST",
+            })) {
+              if (chunk.kind === "content_delta") {
+                assistantText += chunk.delta;
+              }
+              yield chunk;
+            }
+            recSuccess = Boolean(assistantText.trim());
+          }
+
+          if (recSuccess) {
+            executionSucceeded = true;
+            yield {
+              kind: "agent_event",
+              eventType: "recovery_completed",
+              message: "Recovery succeeded",
+              metadata: { strategyId: strat.id },
+            };
+            efficiencyTracker.recordRecovery({
+              category: failure.category,
+              strategyId: strat.id,
+              success: true,
+              latencyMs: Date.now() - tRecStart,
+            });
+            strategyMemory.recordStrategy({
+              queryFingerprint: strategyMemory.generateFingerprint(userText),
+              category: decision.intentResult.intent,
+              successfulMode: strat.targetMode,
+              userId: userId ?? undefined,
+              projectId: projectId ?? undefined,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (recErr) {
+          yield {
+            kind: "agent_event",
+            eventType: "recovery_failed",
+            message: "Recovery strategy failed; terminating turn safely",
+            metadata: { error: recErr instanceof Error ? recErr.message : String(recErr) },
+          };
+          efficiencyTracker.recordRecovery({
+            category: failure.category,
+            strategyId: strat.id,
+            success: false,
+            latencyMs: Date.now() - tRecStart,
+          });
+          yield {
+            kind: "content_delta",
+            delta: "I encountered an issue processing your request and was unable to recover. Please try again or rephrase your query.",
+          };
+        }
+      }
+    } else {
+      yield {
+        kind: "agent_event",
+        eventType: "agent_failed",
+        message: `Execution failed: ${failure.reason}`,
+        metadata: { category: failure.category },
+      };
+      yield {
+        kind: "content_delta",
+        delta: `Execution stopped: ${failure.reason}`,
+      };
+    }
   }
 
   // Cache successful responses for safe queries
-  if (isCacheable && cacheKey && userId && assistantText.trim()) {
+  if (executionSucceeded && isCacheable && cacheKey && userId && assistantText.trim()) {
     inferenceCache.set(cacheKey, assistantText, { userId, projectId });
   }
 
@@ -499,8 +631,8 @@ export async function* runUnifiedAgentTurn(
   // 8. Lifecycle Event: Agent Completed
   yield {
     kind: "agent_event",
-    eventType: "agent_completed",
-    message: "Agent turn completed successfully",
-    metadata: { mode: decision.mode },
+    eventType: executionSucceeded ? "agent_completed" : "agent_failed",
+    message: executionSucceeded ? "Agent turn completed successfully" : "Agent turn ended with failure",
+    metadata: { mode: decision.mode, success: executionSucceeded },
   };
 }
