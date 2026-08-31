@@ -61,6 +61,8 @@ __pycache__/
 # so inference cannot run against a differently-trained vocabulary.
 /checkpoints/
 /datasets/
+/data/raw/
+/data/processed/
 
 # generated evaluation output
 /reports/

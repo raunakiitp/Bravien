@@ -213,6 +213,26 @@ class Deduplicator:
                     self.stats.dropped_by_source.get(key, 0) + 1
                 )
 
+    def filter_examples(self, examples: Iterable[Any]) -> Iterator[Any]:
+        """Yield only the first occurrence of each distinct conversation example."""
+        for ex in examples:
+            msgs = ex.messages if hasattr(ex, "messages") else ex.get("messages", [])
+            parts = []
+            for m in msgs:
+                r = m.role if hasattr(m, "role") else m.get("role", "")
+                c = m.content if hasattr(m, "content") else m.get("content", "")
+                parts.append(f"{r}:{c.strip()}")
+            text = " ".join(parts)
+            reason = self.is_duplicate(text)
+            if reason is None:
+                yield ex
+            else:
+                src = getattr(ex, "source", "unknown")
+                key = f"{reason}:{src}"
+                self.stats.dropped_by_source[key] = (
+                    self.stats.dropped_by_source.get(key, 0) + 1
+                )
+
 
 def deduplicate(
     documents: Iterable[Document], **kwargs: object

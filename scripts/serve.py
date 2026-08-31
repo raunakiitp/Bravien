@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If it's a local path and doesn't exist, check fallback
     if isinstance(checkpoint, Path) and not checkpoint.exists() and not args.model:
-        default_hf = "HuggingFaceTB/SmolLM-135M-Instruct"
+        default_hf = "Qwen/Qwen2.5-0.5B-Instruct"
         print(
             f"Note: Local checkpoint not found at {checkpoint}.\n"
             f"Loading smart pretrained open weights: {default_hf}...\n",

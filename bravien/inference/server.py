@@ -639,7 +639,13 @@ def resolve_checkpoint_path(explicit: str | Path | None = None) -> Path | str:
     from_env = os.environ.get("BRAVIEN_CHECKPOINT") or os.environ.get("BRAVIEN_MODEL")
     if from_env:
         return from_env if ("/" in from_env and not Path(from_env).exists()) else Path(from_env)
-    return Path("checkpoints") / "bravien"
+    
+    # Canonical production checkpoint preference
+    if (Path("checkpoints") / "bravien-v1").exists():
+        return Path("checkpoints") / "bravien-v1"
+    if (Path("checkpoints") / "bravien").exists():
+        return Path("checkpoints") / "bravien"
+    return "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 def serve(
