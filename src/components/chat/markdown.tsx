@@ -11,7 +11,7 @@
  */
 
 import { memo, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Terminal } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -63,33 +63,40 @@ function CodeBlock({
       setTimeout(() => setCopied(false), 1600);
     } catch {
       // Clipboard access can be refused (insecure origin, denied permission).
-      // The code is still selectable; silently doing nothing is honest here.
     }
   };
 
   return (
-    <div className="group/code relative my-4">
-      <div className="flex items-center justify-between rounded-t-xl border border-b-0 border-border bg-muted/60 px-3 py-1.5">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-          {language ?? "code"}
-        </span>
+    <div className="group/code relative my-4 rounded-xl border border-border/90 bg-card overflow-hidden shadow-xs">
+      <div className="flex items-center justify-between border-b border-border/80 bg-muted/50 px-3.5 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <Terminal className="size-3.5 text-muted-foreground" aria-hidden />
+          <span className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {language ?? "code"}
+          </span>
+        </div>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          aria-label={copied ? "Copied" : "Copy code"}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] text-muted-foreground transition-all hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none cursor-pointer"
+          aria-label={copied ? "Copied code" : "Copy code"}
         >
           {copied ? (
-            <Check className="size-3 text-brand" aria-hidden />
+            <>
+              <Check className="size-3 text-brand" aria-hidden />
+              <span className="text-brand font-medium">Copied!</span>
+            </>
           ) : (
-            <Copy className="size-3" aria-hidden />
+            <>
+              <Copy className="size-3" aria-hidden />
+              <span>Copy</span>
+            </>
           )}
-          {copied ? "Copied" : "Copy"}
         </button>
       </div>
       <pre
         ref={ref}
-        className={cn("mt-0! rounded-t-none!", className)}
+        className={cn("mt-0! p-4 font-mono text-[13px] leading-relaxed overflow-x-auto bg-transparent", className)}
         {...props}
       >
         {children}
@@ -102,7 +109,13 @@ const components: Components = {
   pre: CodeBlock,
   a({ href, children, ...props }) {
     return (
-      <a href={href} target="_blank" rel="noreferrer noopener" {...props}>
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="text-brand underline underline-offset-2 hover:text-brand/80 transition-colors"
+        {...props}
+      >
         {children}
       </a>
     );
@@ -110,8 +123,10 @@ const components: Components = {
   // Tables need a scroll container or a wide one breaks the message column.
   table({ children, ...props }) {
     return (
-      <div className="my-4 overflow-x-auto">
-        <table {...props}>{children}</table>
+      <div className="my-4 overflow-x-auto rounded-lg border border-border/80">
+        <table className="w-full text-sm" {...props}>
+          {children}
+        </table>
       </div>
     );
   },
@@ -138,7 +153,7 @@ export const Markdown = memo(function Markdown({
   className?: string;
 }) {
   return (
-    <div className={cn("prose-bravien", className)}>
+    <div className={cn("prose-bravien leading-7 text-[15px]", className)}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

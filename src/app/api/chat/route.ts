@@ -269,6 +269,7 @@ export async function POST(request: Request) {
 
       let assistantText = "";
       let failed = false;
+      let sawComplete = false;
 
       try {
         send({
@@ -294,7 +295,18 @@ export async function POST(request: Request) {
         })) {
           if (chunk.kind === "content_delta") assistantText += chunk.delta;
           if (chunk.kind === "error") failed = true;
+          if (chunk.kind === "message_complete") sawComplete = true;
           send(chunk);
+        }
+
+        if (!failed && !sawComplete && assistantText.length > 0) {
+          send({
+            kind: "message_complete",
+            finishReason: "stop",
+            usage: {
+              outputTokens: Math.ceil(assistantText.length / 4),
+            },
+          });
         }
       } catch (error) {
         failed = true;

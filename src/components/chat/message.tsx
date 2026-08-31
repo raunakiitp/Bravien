@@ -16,6 +16,7 @@ import {
   Copy,
   Pencil,
   RefreshCw,
+  Sparkles,
   Square,
   ThumbsDown,
   ThumbsUp,
@@ -36,6 +37,7 @@ function CopyButton({ text }: { text: string }) {
       variant="ghost"
       size="icon-xs"
       aria-label={copied ? "Copied" : "Copy message"}
+      className="rounded-md hover:bg-muted"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -47,9 +49,9 @@ function CopyButton({ text }: { text: string }) {
       }}
     >
       {copied ? (
-        <Check className="text-brand" aria-hidden />
+        <Check className="size-3.5 text-brand" aria-hidden />
       ) : (
-        <Copy aria-hidden />
+        <Copy className="size-3.5" aria-hidden />
       )}
     </Button>
   );
@@ -69,22 +71,49 @@ function FeedbackButtons({ messageId }: { messageId: string }) {
         variant="ghost"
         size="icon-xs"
         aria-label="Helpful response"
-        className={cn(feedback === "LIKE" && "text-brand bg-brand/10")}
+        className={cn(
+          "rounded-md hover:bg-muted",
+          feedback === "LIKE" && "text-brand bg-brand/10",
+        )}
         onClick={() => sendFeedback("LIKE")}
       >
-        <ThumbsUp className="size-3" />
+        <ThumbsUp className="size-3.5" />
       </Button>
       <Button
         variant="ghost"
         size="icon-xs"
         aria-label="Unhelpful response"
-        className={cn(feedback === "DISLIKE" && "text-destructive bg-destructive/10")}
+        className={cn(
+          "rounded-md hover:bg-muted",
+          feedback === "DISLIKE" && "text-destructive bg-destructive/10",
+        )}
         onClick={() => sendFeedback("DISLIKE")}
       >
-        <ThumbsDown className="size-3" />
+        <ThumbsDown className="size-3.5" />
       </Button>
     </div>
   );
+}
+
+/** Deterministic follow-up suggestions derived from message structure */
+function getSmartSuggestions(content: string): string[] {
+  if (!content || content.length < 10) return [];
+  const suggestions: string[] = [];
+
+  if (content.includes("```")) {
+    suggestions.push("Explain this code step by step");
+    suggestions.push("Add error handling & edge cases");
+    suggestions.push("Write automated unit tests");
+  } else if (content.length > 350) {
+    suggestions.push("Summarize in 3 bullet points");
+    suggestions.push("Give a practical example");
+    suggestions.push("Go deeper into key details");
+  } else {
+    suggestions.push("Explain simpler");
+    suggestions.push("Show code example");
+    suggestions.push("What are the next steps?");
+  }
+  return suggestions.slice(0, 3);
 }
 
 function UserTurn({
@@ -145,8 +174,8 @@ function UserTurn({
   }
 
   return (
-    <div className="group/turn flex flex-col items-end gap-1">
-      <div className="max-w-[46rem] rounded-2xl rounded-br-md border border-border/70 bg-secondary px-4 py-2.5 text-[15px] leading-7 whitespace-pre-wrap break-words text-secondary-foreground">
+    <div className="group/turn flex flex-col items-end gap-1.5">
+      <div className="max-w-[46rem] rounded-2xl rounded-br-md border border-border/80 bg-secondary/80 px-4 py-3 text-[15px] leading-7 whitespace-pre-wrap break-words text-secondary-foreground shadow-2xs">
         {message.content}
       </div>
 
@@ -170,9 +199,10 @@ function UserTurn({
             variant="ghost"
             size="icon-xs"
             aria-label="Edit and resend"
+            className="rounded-md hover:bg-muted"
             onClick={() => setEditing(true)}
           >
-            <Pencil aria-hidden />
+            <Pencil className="size-3.5" aria-hidden />
           </Button>
         )}
       </div>
@@ -218,15 +248,6 @@ function TurnError({
   );
 }
 
-/**
- * Says out loud when the conversation did not fit the model's context.
- *
- * The runtime counts the prompt with the real tokenizer and reports exactly what
- * it had to drop. Showing that is the difference between "the model ignored my
- * earlier message" and "the model never received my earlier message" — the user
- * can act on the second and is only confused by the first. Nothing here is
- * computed in the browser; every number comes from the runtime.
- */
 function ContextNotice({ context }: { context: UiMessage["context"] }) {
   if (!context?.truncated) return null;
 
@@ -260,31 +281,41 @@ function AssistantTurn({
   message,
   onRegenerate,
   onStop,
+  onSuggestionClick,
   isLast,
   busy,
 }: {
   message: UiMessage;
   onRegenerate?: () => void;
   onStop?: () => void;
+  onSuggestionClick?: (text: string) => void;
   isLast: boolean;
   busy: boolean;
 }) {
-  const streaming = message.status === "streaming" || message.status === "pending";
+  // CRITICAL FIX: The assistant turn is streaming ONLY while the active generation request exists
+  const isStreaming =
+    busy && isLast && (message.status === "streaming" || message.status === "pending");
   const empty = message.content.length === 0;
 
   return (
-    <div className="group/turn border-l-2 border-brand/25 pl-4 sm:pl-5">
-      <div className="mb-1.5 flex items-center gap-2">
+    <div className="group/turn border-l-2 border-brand/35 pl-4 sm:pl-5 transition-colors">
+      <div className="mb-2 flex items-center gap-2">
         <BravienMark className="size-4 text-brand" />
         <span className="font-display text-[13px] font-semibold tracking-tight">
           Bravien
         </span>
         {message.model && (
-          <span className="rounded border border-border/70 px-1.5 py-px font-mono text-[10px] text-muted-foreground">
+          <span className="rounded-full border border-border/80 bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
             {message.model}
           </span>
         )}
-        {message.status === "stopped" && (
+        {isStreaming && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-brand/10 px-2 py-0.5 text-[10px] font-medium text-brand animate-pulse">
+            <span className="size-1.5 rounded-full bg-brand" />
+            Generating
+          </span>
+        )}
+        {message.status === "stopped" && !isStreaming && (
           <span className="text-[11px] text-muted-foreground">
             stopped early
           </span>
@@ -297,18 +328,18 @@ function AssistantTurn({
         <>
           {/* Agent Activity & Execution Events */}
           {message.agentEvents && message.agentEvents.length > 0 && (
-            <div className="mb-2.5">
-              {streaming ? (
-                <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary animate-pulse">
+            <div className="mb-3">
+              {isStreaming ? (
+                <div className="inline-flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary animate-pulse">
                   <span className="size-1.5 rounded-full bg-primary" />
                   <span>{message.agentEvents[message.agentEvents.length - 1].message}</span>
                 </div>
               ) : (
                 <details className="group/events text-[11px] text-muted-foreground">
-                  <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-muted/40 font-mono text-[10px]">
-                    <span className="text-emerald-500 font-bold">✓</span> Agent execution ({message.agentEvents.length} events)
+                  <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-muted/50 font-mono text-[10px] transition-colors">
+                    <span className="text-emerald-500 font-bold">✓</span> Agent execution ({message.agentEvents.length} steps)
                   </summary>
-                  <div className="mt-1 pl-3 border-l border-border/60 space-y-0.5 text-[11px] text-muted-foreground/80">
+                  <div className="mt-1.5 pl-3 border-l border-border/70 space-y-1 text-[11px] text-muted-foreground/80">
                     {message.agentEvents.map((ev, i) => (
                       <div key={i} className="flex items-center gap-1.5">
                         <span className="text-muted-foreground/40 text-[9px]">•</span>
@@ -334,7 +365,7 @@ function AssistantTurn({
                   target="_blank"
                   rel="noreferrer"
                   title={c.snippet}
-                  className="inline-flex items-center gap-1 rounded border border-border/80 bg-muted/30 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 >
                   <span className="font-mono text-primary font-bold">[{i + 1}]</span>
                   <span className="max-w-[140px] truncate">{c.title}</span>
@@ -343,17 +374,15 @@ function AssistantTurn({
             </div>
           )}
 
-          {streaming && empty ? (
-            <p
-              className="streaming-cursor text-sm text-muted-foreground"
-              aria-live="polite"
-            >
-              Generating
-            </p>
+          {isStreaming && empty ? (
+            <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
+              <span className="size-2 rounded-full bg-brand animate-ping" />
+              <span className="text-[13px]">Thinking & generating response…</span>
+            </div>
           ) : (
             <Markdown
               content={message.content}
-              className={cn(streaming && "streaming-cursor")}
+              className={cn(isStreaming && "streaming-cursor")}
             />
           )}
 
@@ -365,21 +394,46 @@ function AssistantTurn({
           )}
 
           <ContextNotice context={message.context} />
+
+          {/* Smart Follow-up Suggestions (only on completed turns) */}
+          {!isStreaming && !empty && isLast && onSuggestionClick && (
+            <div className="mt-4 flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground mr-1">
+                <Sparkles className="size-3 text-brand" /> Follow up:
+              </span>
+              {getSmartSuggestions(message.content).map((s, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => onSuggestionClick(s)}
+                  className="rounded-full border border-border/80 bg-card px-3 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted hover:border-brand/40 transition-all shadow-2xs cursor-pointer active:scale-98"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
         </>
       )}
 
+      {/* Action Bar */}
       <div
         className={cn(
-          "mt-2 flex items-center gap-0.5 transition-opacity",
-          streaming
+          "mt-2.5 flex items-center gap-1 transition-opacity",
+          isStreaming
             ? "opacity-100"
             : "opacity-0 group-hover/turn:opacity-100 focus-within:opacity-100",
         )}
       >
-        {streaming ? (
+        {isStreaming ? (
           onStop && (
-            <Button variant="ghost" size="sm" onClick={onStop}>
-              <Square aria-hidden /> Stop
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full text-xs font-medium border-border/80 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 shadow-2xs"
+              onClick={onStop}
+            >
+              <Square className="size-3 fill-current" aria-hidden /> Stop generating
             </Button>
           )
         ) : (
@@ -390,15 +444,16 @@ function AssistantTurn({
                 variant="ghost"
                 size="icon-xs"
                 aria-label="Regenerate this answer"
+                className="rounded-md hover:bg-muted"
                 disabled={busy}
                 onClick={onRegenerate}
               >
-                <RefreshCw aria-hidden />
+                <RefreshCw className="size-3.5" aria-hidden />
               </Button>
             )}
             <FeedbackButtons messageId={message.id} />
             {message.usage?.outputTokens != null && (
-              <span className="ml-1 font-mono text-[10px] text-muted-foreground">
+              <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
                 {message.usage.outputTokens} tok
                 {message.context
                   ? ` · ${message.context.input_tokens}/${message.context.max_context_tokens} ctx`
@@ -422,6 +477,7 @@ export function MessageTurn({
   onRegenerate,
   onStop,
   onEdit,
+  onSuggestionClick,
 }: {
   message: UiMessage;
   isLast: boolean;
@@ -429,6 +485,7 @@ export function MessageTurn({
   onRegenerate?: () => void;
   onStop?: () => void;
   onEdit?: (text: string) => void;
+  onSuggestionClick?: (text: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -446,6 +503,7 @@ export function MessageTurn({
       busy={busy}
       onRegenerate={onRegenerate}
       onStop={onStop}
+      onSuggestionClick={onSuggestionClick}
     />
   );
 }

@@ -210,6 +210,14 @@ export async function* runUnifiedAgentTurn(
       delta: gate.directResponse,
     };
     yield {
+      kind: "message_complete",
+      finishReason: "stop",
+      usage: {
+        inputTokens: Math.ceil(userText.length / 4),
+        outputTokens: Math.ceil(gate.directResponse.length / 4),
+      },
+    };
+    yield {
       kind: "agent_event",
       eventType: "agent_completed",
       message: "Direct response completed",
@@ -266,6 +274,14 @@ export async function* runUnifiedAgentTurn(
       yield {
         kind: "content_delta",
         delta: cachedResponse,
+      };
+      yield {
+        kind: "message_complete",
+        finishReason: "stop",
+        usage: {
+          inputTokens: Math.ceil(userText.length / 4),
+          outputTokens: Math.ceil(cachedResponse.length / 4),
+        },
       };
       yield {
         kind: "agent_event",
