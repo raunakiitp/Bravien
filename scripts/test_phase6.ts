@@ -77,8 +77,11 @@ async function runPhase6Tests() {
   assert(complexPlan.steps.length <= MAX_PLAN_STEPS, `Plan steps strictly capped under max ${MAX_PLAN_STEPS}`);
 
   // Test plan execution
-  const testUser = await prisma.user.findFirst();
-  const userId = testUser?.id ?? "test_user_id";
+  let userId = "test_user_id";
+  try {
+    const testUser = await prisma.user.findFirst();
+    if (testUser) userId = testUser.id;
+  } catch {}
   const executedPlan = await executePlan(
     complexPlan,
     { userId },

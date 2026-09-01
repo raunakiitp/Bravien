@@ -425,3 +425,16 @@ class HFInferenceEngine:
             "mean_logprob": -loss,
             "perplexity": float(torch.exp(torch.tensor(loss)).item()),
         }
+
+    def warmup(self, test_prompt: str = "Hello") -> dict[str, Any]:
+        """Run a tiny generation to warm up PyTorch/CUDA kernels and verify tokenizer/model."""
+        t0 = time.time()
+        res = self.complete(test_prompt, generation={"max_new_tokens": 4, "temperature": 0.0})
+        latency_ms = round((time.time() - t0) * 1000, 2)
+        return {
+            "warmed_up": True,
+            "latency_ms": latency_ms,
+            "tokens_generated": res.completion_tokens,
+            "model": self.model_name,
+            "device": self.device_info.name,
+        }

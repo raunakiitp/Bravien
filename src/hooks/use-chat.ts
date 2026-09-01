@@ -27,6 +27,14 @@ export interface ChatSendOptions {
 
 export type TurnStatus = "pending" | "streaming" | "done" | "failed" | "stopped";
 
+export type GenerationState =
+  | "IDLE"
+  | "SUBMITTING"
+  | "STREAMING"
+  | "COMPLETED"
+  | "ERROR"
+  | "CANCELLED";
+
 export interface TurnError {
   code: string;
   message: string;
@@ -146,6 +154,7 @@ export function useChat(options: UseChatOptions = {}) {
       .map(fromDto)
       .filter((m): m is UiMessage => m !== null),
   );
+  const [generationState, setGenerationState] = useState<GenerationState>("IDLE");
   const [busy, setBusy] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(
     options.conversationId ?? null,
@@ -157,17 +166,16 @@ export function useChat(options: UseChatOptions = {}) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
-  // Latest-value refs, synced after commit rather than written during render.
-  // Every reader is an event handler or async continuation, so "the last
-  // committed value" is exactly what they want: `send` needs the turns that
-  // existed *before* the one being added.
   const messagesRef = useRef(messages);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
   }, []);
 
   const patch = useCallback((id: string, change: Partial<UiMessage>) => {
@@ -178,9 +186,6 @@ export function useChat(options: UseChatOptions = {}) {
 
   /**
    * Run one turn against `/api/chat`.
-   *
-   * `history` is the conversation as the model should see it; `placeholderId` is
-   * the empty assistant turn already on screen that deltas append to.
    */
   const run = useCallback(
     async (
@@ -190,8 +195,10 @@ export function useChat(options: UseChatOptions = {}) {
     ) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      setGenerationState("SUBMITTING");
       setBusy(true);
 
+      let currentAssistantId = placeholderId;
       let received = "";
       let sawComplete = false;
       let failure: TurnError | null = null;
@@ -225,6 +232,7 @@ export function useChat(options: UseChatOptions = {}) {
         if (!response.ok) {
           const error = await apiErrorFrom(response);
           failure = { code: error.code, message: error.message };
+          setGenerationState("ERROR");
           return;
         }
         if (!response.body) {
@@ -232,8 +240,11 @@ export function useChat(options: UseChatOptions = {}) {
             code: "EMPTY_BODY",
             message: "The server did not send a response stream.",
           };
+          setGenerationState("ERROR");
           return;
         }
+
+        setGenerationState("STREAMING");
 
         for await (const payload of readFrames(response.body, controller.signal)) {
           if (controller.signal.aborted) break;
@@ -242,8 +253,6 @@ export function useChat(options: UseChatOptions = {}) {
           try {
             frame = JSON.parse(payload) as ChatStreamFrame;
           } catch {
-            // A malformed frame is a transport bug. Dropping it is right: it is
-            // not model output and must not be rendered as if it were.
             continue;
           }
 
@@ -252,7 +261,7 @@ export function useChat(options: UseChatOptions = {}) {
               setModel(frame.model);
               setPersisted(frame.persisted);
               optionsRef.current.onPersistedChange?.(frame.persisted);
-              patch(placeholderId, { model: frame.model, status: "streaming" });
+              patch(currentAssistantId, { model: frame.model, status: "streaming" });
               if (frame.conversationId && frame.conversationId !== conversationId) {
                 setConversationId(frame.conversationId);
                 optionsRef.current.onConversationCreated?.(
@@ -267,7 +276,7 @@ export function useChat(options: UseChatOptions = {}) {
                 eventType: frame.eventType,
                 message: frame.message,
               });
-              patch(placeholderId, {
+              patch(currentAssistantId, {
                 agentEvents: [...agentEvents],
                 status: "streaming",
               });
@@ -279,38 +288,40 @@ export function useChat(options: UseChatOptions = {}) {
                 url: frame.url,
                 snippet: frame.snippet,
               });
-              patch(placeholderId, {
+              patch(currentAssistantId, {
                 citations: [...citations],
               });
               break;
             }
             case "content_delta": {
               received += frame.delta;
-              patch(placeholderId, { content: received, status: "streaming" });
+              patch(currentAssistantId, { content: received, status: "streaming" });
               break;
             }
             case "message_complete": {
               sawComplete = true;
-              patch(placeholderId, {
+              patch(currentAssistantId, {
                 status: "done",
                 finishReason: frame.finishReason,
                 usage: frame.usage,
                 context: frame.context,
               });
+              setGenerationState("COMPLETED");
               break;
             }
             case "error": {
               failure = { code: frame.code, message: frame.message };
+              setGenerationState("ERROR");
               break;
             }
             case "saved": {
-              // Adopt the database ids so later edits and feedback address rows
-              // that exist.
               const assistantId = frame.assistantMessageId;
               if (assistantId) {
+                const oldId = currentAssistantId;
+                currentAssistantId = assistantId;
                 setMessages((current) =>
                   current.map((m) =>
-                    m.id === placeholderId ? { ...m, id: assistantId } : m,
+                    m.id === oldId ? { ...m, id: assistantId } : m,
                   ),
                 );
               }
@@ -326,16 +337,13 @@ export function useChat(options: UseChatOptions = {}) {
               break;
             }
             default:
-              // tool_start / tool_result / citation: no tool-using checkpoint
-              // exists yet, so there is nothing honest to render for these.
               break;
           }
         }
       } catch (cause) {
         if (controller.signal.aborted) {
-          // A deliberate stop. The partial text stays: the model did produce it,
-          // and a `saved` frame never arrived to rename the placeholder.
-          patch(placeholderId, { status: "stopped" });
+          setGenerationState("CANCELLED");
+          patch(currentAssistantId, { status: "stopped" });
           return;
         }
         failure = {
@@ -345,26 +353,35 @@ export function useChat(options: UseChatOptions = {}) {
               ? cause.message
               : "The connection to Bravien dropped.",
         };
+        setGenerationState("ERROR");
       } finally {
         abortRef.current = null;
         setBusy(false);
-      }
 
-      if (failure) {
-        patch(placeholderId, {
-          status: "failed",
-          error: failure,
-        });
-      } else if (received.length === 0) {
-        patch(placeholderId, {
-          status: "failed",
-          error: {
-            code: "EMPTY_RESPONSE",
-            message: "The runtime returned no tokens for this turn.",
-          },
-        });
-      } else if (!sawComplete) {
-        patch(placeholderId, { status: "stopped" });
+        // Final authoritative state reconciliation
+        if (controller.signal.aborted) {
+          patch(currentAssistantId, { status: "stopped" });
+          setGenerationState("IDLE");
+        } else if (failure) {
+          patch(currentAssistantId, {
+            status: "failed",
+            error: failure,
+          });
+          setGenerationState("IDLE");
+        } else if (received.length === 0) {
+          patch(currentAssistantId, {
+            status: "failed",
+            error: {
+              code: "EMPTY_RESPONSE",
+              message: "The runtime returned no tokens for this turn.",
+            },
+          });
+          setGenerationState("IDLE");
+        } else {
+          // Normal success — unconditionally ensure turn is marked 'done'
+          patch(currentAssistantId, { status: "done" });
+          setGenerationState("IDLE");
+        }
       }
     },
     [conversationId, patch],
@@ -373,10 +390,8 @@ export function useChat(options: UseChatOptions = {}) {
   const send = useCallback(
     async (text: string, sendOptions: ChatSendOptions = {}) => {
       const body = text.trim();
-      if (!body || abortRef.current) return;
+      if (!body || abortRef.current || busy) return;
 
-      // Document text is prepended to what the model reads but kept out of the
-      // bubble, so the user sees their message and not a wall of file contents.
       const documents = sendOptions.attachments ?? [];
       const prompt = documents.length
         ? `${documents
@@ -412,23 +427,26 @@ export function useChat(options: UseChatOptions = {}) {
 
       setMessages((current) => [...current, userMessage, placeholder]);
 
-      // What the model sees: prior turns plus the prompt, attachments included.
       const history = [
         ...messagesRef.current.filter((m) => m.status !== "failed"),
         { ...userMessage, content: prompt },
       ];
       await run(history, placeholderId, { clientMessageId: userId });
     },
-    [run],
+    [run, busy],
   );
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+      setBusy(false);
+      setGenerationState("CANCELLED");
+    }
   }, []);
 
-  /** Re-run the last turn. The previous answer is dropped, not kept alongside. */
   const regenerate = useCallback(async () => {
-    if (abortRef.current) return;
+    if (abortRef.current || busy) return;
     const current = messagesRef.current;
     const lastAssistant = [...current]
       .reverse()
@@ -452,13 +470,12 @@ export function useChat(options: UseChatOptions = {}) {
       },
     ]);
     await run(history, placeholderId, { regenerate: true });
-  }, [run]);
+  }, [run, busy]);
 
-  /** Replace a user message and re-answer from that point. */
   const editAndResend = useCallback(
     async (messageId: string, text: string) => {
       const body = text.trim();
-      if (!body || abortRef.current) return;
+      if (!body || abortRef.current || busy) return;
 
       const current = messagesRef.current;
       const index = current.findIndex((m) => m.id === messageId);
@@ -485,7 +502,7 @@ export function useChat(options: UseChatOptions = {}) {
       ]);
       await run(history, placeholderId, { regenerate: true });
     },
-    [run],
+    [run, busy],
   );
 
   const reset = useCallback(
@@ -493,6 +510,7 @@ export function useChat(options: UseChatOptions = {}) {
       abortRef.current?.abort();
       abortRef.current = null;
       setBusy(false);
+      setGenerationState("IDLE");
       setConversationId(next?.conversationId ?? null);
       setMessages(
         (next?.messages ?? [])
@@ -506,6 +524,7 @@ export function useChat(options: UseChatOptions = {}) {
   return {
     messages,
     busy,
+    generationState,
     conversationId,
     persisted,
     model,

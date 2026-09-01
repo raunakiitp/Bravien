@@ -39,7 +39,7 @@ export function Composer({
   disabled = false,
   disabledReason,
   uploadsEnabled = false,
-  placeholder = "Ask Bravien something",
+  placeholder = "Message Bravien (Enter to send, Shift+Enter for newline)",
   autoFocus = false,
 }: ComposerProps) {
   const [value, setValue] = useState("");
@@ -83,7 +83,7 @@ export function Composer({
     }
   }
 
-  // Grow with the content up to a ceiling, then scroll inside.
+  // Grow with content up to maximum ceiling
   const resize = useCallback(() => {
     const node = textareaRef.current;
     if (!node) return;
@@ -107,8 +107,12 @@ export function Composer({
     onSend(text, attachments);
     setValue("");
     setAttachments([]);
-    // Return focus so a conversation can be held entirely from the keyboard.
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        textareaRef.current.focus();
+      }
+    });
   };
 
   const upload = async (files: FileList | null) => {
@@ -155,9 +159,9 @@ export function Composer({
           {attachments.map((file, index) => (
             <li
               key={`${file.name}-${index}`}
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1 text-xs"
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs shadow-2xs"
             >
-              <span className="max-w-48 truncate font-medium">{file.name}</span>
+              <span className="max-w-48 truncate font-medium text-foreground">{file.name}</span>
               <span className="font-mono text-[10px] text-muted-foreground">
                 {file.text.length.toLocaleString()} chars
               </span>
@@ -180,8 +184,8 @@ export function Composer({
 
       <div
         className={cn(
-          "flex items-end gap-2 rounded-2xl border border-border bg-card p-2 shadow-sm transition-colors",
-          "focus-within:border-brand/50 focus-within:ring-3 focus-within:ring-brand/15",
+          "flex items-end gap-1.5 rounded-2xl border border-border/90 bg-card p-2 shadow-xs transition-all",
+          "focus-within:border-brand/60 focus-within:ring-3 focus-within:ring-brand/15",
           disabled && "opacity-60",
         )}
       >
@@ -200,13 +204,14 @@ export function Composer({
               size="icon-sm"
               type="button"
               aria-label="Attach a text document"
+              className="rounded-xl text-muted-foreground hover:text-foreground"
               disabled={disabled || uploading}
               onClick={() => fileRef.current?.click()}
             >
               {uploading ? (
-                <Loader2 className="animate-spin" aria-hidden />
+                <Loader2 className="size-4 animate-spin" aria-hidden />
               ) : (
-                <Paperclip aria-hidden />
+                <Paperclip className="size-4" aria-hidden />
               )}
             </Button>
           </>
@@ -221,8 +226,6 @@ export function Composer({
           aria-label="Message Bravien"
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
-            // Enter sends, Shift+Enter breaks the line. IME composition must not
-            // be interrupted, or CJK input submits half a word.
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -232,7 +235,7 @@ export function Composer({
               submit();
             }
           }}
-          className="max-h-[280px] min-h-9 flex-1 resize-none bg-transparent px-1.5 py-2 text-[15px] leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          className="max-h-[280px] min-h-9 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-6 outline-none placeholder:text-muted-foreground/80 disabled:cursor-not-allowed"
         />
 
         <Button
@@ -242,9 +245,12 @@ export function Composer({
           aria-label={isListening ? "Stop microphone" : "Speak message"}
           disabled={disabled}
           onClick={toggleVoice}
-          className={cn(isListening && "text-brand bg-brand/10 animate-pulse")}
+          className={cn(
+            "rounded-xl text-muted-foreground hover:text-foreground",
+            isListening && "text-brand bg-brand/10 animate-pulse",
+          )}
         >
-          {isListening ? <MicOff aria-hidden /> : <Mic aria-hidden />}
+          {isListening ? <MicOff className="size-4" aria-hidden /> : <Mic className="size-4" aria-hidden />}
         </Button>
 
         {busy ? (
@@ -253,34 +259,34 @@ export function Composer({
             variant="outline"
             size="icon-sm"
             aria-label="Stop generating"
+            className="rounded-xl border-border/90 bg-muted/60 text-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30"
             onClick={onStop}
           >
-            <Square aria-hidden />
+            <Square className="size-3.5 fill-current" aria-hidden />
           </Button>
         ) : (
           <Button
             type="button"
             size="icon-sm"
             aria-label="Send message"
+            className="rounded-xl bg-brand text-brand-foreground hover:bg-brand/90 transition-transform active:scale-95"
             disabled={disabled || !value.trim()}
             onClick={submit}
           >
-            <ArrowUp aria-hidden />
+            <ArrowUp className="size-4 stroke-[2.5]" aria-hidden />
           </Button>
         )}
       </div>
 
-      <p className="mt-2 px-1 text-[11px] leading-4 text-muted-foreground">
+      <div className="mt-2 flex items-center justify-between px-1 text-[11px] leading-4 text-muted-foreground">
         {disabled && disabledReason ? (
-          <span className="text-destructive">{disabledReason}</span>
+          <span className="text-destructive font-medium">{disabledReason}</span>
         ) : (
-          <>
-            <kbd className="font-mono">Enter</kbd> to send,{" "}
-            <kbd className="font-mono">Shift+Enter</kbd> for a new line. Bravien
-            runs on this machine and can be wrong — check anything that matters.
-          </>
+          <span>
+            Bravien-v1 offline intelligence · Private & local on your machine
+          </span>
         )}
-      </p>
+      </div>
     </div>
   );
 }

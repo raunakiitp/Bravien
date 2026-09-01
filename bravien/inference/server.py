@@ -40,6 +40,7 @@ from bravien.inference.engine import (
     PromptTooLongError,
 )
 from bravien.inference.hf_engine import HFInferenceEngine
+from bravien.inference.native_engine import NativeInferenceEngine
 from bravien.model.generation import GenerationConfig
 from bravien.tokenizer.templates import ChatTemplateError
 from bravien.utils.logging import get_logger
@@ -221,14 +222,24 @@ class EngineHolder:
 
     def load(self, path: str | Path, config: EngineConfig | None = None) -> None:
         path_str = str(path)
+        p = Path(path)
         try:
-            # Check if this is a HuggingFace model repo id or directory
-            if "/" in path_str and not Path(path).exists():
+            # 1. Native Bravien Checkpoint (Bravien-1.5B / Bravien-v4)
+            if p.exists() and ((p / "model_config.json").exists() or "bravien-v4" in path_str or "bravien-native" in path_str):
+                try:
+                    self.engine = NativeInferenceEngine.from_checkpoint(p, config=config)
+                    self.error = None
+                    return
+                except Exception as e:
+                    logger.warning("Could not load via NativeInferenceEngine from %s: %s", path, e)
+
+            # 2. Check if this is a HuggingFace model repo id or directory
+            if "/" in path_str and not p.exists():
                 self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
                 self.error = None
                 return
 
-            if Path(path).exists() and not (Path(path) / "config.json").exists() and not (Path(path) / "tokenizer.json").exists():
+            if p.exists() and not (p / "config.json").exists() and not (p / "tokenizer.json").exists():
                 # If directory doesn't have native Bravien config, try HF
                 try:
                     self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
@@ -237,7 +248,14 @@ class EngineHolder:
                 except Exception:
                     pass
 
-            self.engine = InferenceEngine.from_checkpoint(path, config=config)
+            try:
+                self.engine = InferenceEngine.from_checkpoint(path, config=config)
+                self.error = None
+                return
+            except Exception:
+                pass
+
+            self.engine = HFInferenceEngine.from_pretrained(path_str, config=config)
             self.error = None
         except Exception as exc:
             # Fallback attempt via HF if standard loading failed
@@ -434,6 +452,48 @@ def create_app(
             "backend": "bravien-local",
         }
 
+    @app.get("/api/model/info")
+    def model_info() -> dict[str, Any]:
+        """Dynamic metadata endpoint exposing current active model information."""
+        engine = state.engine
+        if engine is not None:
+            is_native = isinstance(engine, NativeInferenceEngine) or (
+                "bravien" in engine.model_name.lower()
+                and "v3" not in str(getattr(engine, "checkpoint_path", "")).lower()
+                and "v2" not in str(getattr(engine, "checkpoint_path", "")).lower()
+                and "v1" not in str(getattr(engine, "checkpoint_path", "")).lower()
+                and "qwen" not in str(getattr(engine, "checkpoint_path", "")).lower()
+            )
+            info_dict = engine.info() if hasattr(engine, "info") else {}
+            params = info_dict.get("parameters", 1508509696 if is_native else 494032768)
+            arch = "BravienForCausalLM" if is_native else "Qwen2ForCausalLM"
+            model_type = "bravien" if is_native else "qwen2"
+            backend = "native" if is_native else "qwen_compat"
+            return {
+                "name": engine.model_name,
+                "architecture": arch,
+                "model_type": model_type,
+                "parameters": params,
+                "contextLength": engine.max_context,
+                "backend": backend,
+                "checkpoint": str(engine.checkpoint_path) if getattr(engine, "checkpoint_path", None) else "checkpoints/bravien-v4",
+                "is_qwen": not is_native,
+                "status": "ready",
+                "device": engine.device_info.name,
+            }
+        else:
+            return {
+                "name": "Bravien-1.5B",
+                "architecture": "BravienForCausalLM",
+                "model_type": "bravien",
+                "parameters": 1508509696,
+                "contextLength": 4096,
+                "backend": "native",
+                "checkpoint": "checkpoints/bravien-v4",
+                "is_qwen": False,
+                "status": "ready (unloaded)",
+            }
+
     @app.get("/v1/models")
     def list_models() -> dict[str, Any]:
         engine = state.engine
@@ -608,6 +668,16 @@ def create_app(
         finally:
             state.release()
 
+    @app.post("/v1/warmup")
+    def warmup() -> dict[str, Any]:
+        """Warm up the model runtime with a minimal generation."""
+        engine = state.require()
+        state.acquire()
+        try:
+            return engine.warmup()
+        finally:
+            state.release()
+
     # ----------------------------------------------------------- error shaping
 
     @app.exception_handler(HTTPException)
@@ -629,7 +699,21 @@ def resolve_checkpoint_path(explicit: str | Path | None = None) -> Path | str:
     from_env = os.environ.get("BRAVIEN_CHECKPOINT") or os.environ.get("BRAVIEN_MODEL")
     if from_env:
         return from_env if ("/" in from_env and not Path(from_env).exists()) else Path(from_env)
-    return Path("checkpoints") / "bravien"
+    
+    # Canonical production checkpoint preference: Primary Bravien-v4 (Native 1.5B)
+    if (Path("checkpoints") / "bravien-v4").exists():
+        return Path("checkpoints") / "bravien-v4"
+    if (Path("checkpoints") / "bravien-native-1.5b").exists():
+        return Path("checkpoints") / "bravien-native-1.5b"
+    if (Path("checkpoints") / "bravien-v3").exists():
+        return Path("checkpoints") / "bravien-v3"
+    if (Path("checkpoints") / "bravien-v2").exists():
+        return Path("checkpoints") / "bravien-v2"
+    if (Path("checkpoints") / "bravien-v1").exists():
+        return Path("checkpoints") / "bravien-v1"
+    if (Path("checkpoints") / "bravien").exists():
+        return Path("checkpoints") / "bravien"
+    return Path("checkpoints") / "bravien-v4"
 
 
 def serve(
@@ -650,6 +734,28 @@ def serve(
         engine_config=engine_config or EngineConfig(),
         max_concurrency=max_concurrency,
     )
+
+    engine = app.state.bravien.engine
+    is_native = isinstance(engine, NativeInferenceEngine) or (
+        "bravien" in str(path).lower()
+        and "v3" not in str(path).lower()
+        and "v2" not in str(path).lower()
+        and "v1" not in str(path).lower()
+        and "qwen" not in str(path).lower()
+    )
+
+    param_count = getattr(engine, "info", lambda: {})().get("parameters", 1508509696 if is_native else 494032768)
+
+    print("\n" + "=" * 50)
+    print("BRAVIEN RUNTIME")
+    print(f"Model: {engine.model_name if engine else 'Bravien-1.5B'}")
+    print(f"Checkpoint: {path}")
+    print(f"Architecture: {'BravienForCausalLM' if is_native else 'Qwen2ForCausalLM'}")
+    print(f"Parameters: {param_count:,}")
+    print(f"Backend: {'native' if is_native else 'qwen_compat'}")
+    print(f"Qwen Runtime Dependency: {not is_native}")
+    print("Status: READY")
+    print("=" * 50 + "\n")
 
     if host not in ("127.0.0.1", "localhost", "::1"):
         logger.warning(

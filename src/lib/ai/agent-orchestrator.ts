@@ -25,7 +25,12 @@ import {
 import { classifyActionRisk } from "./action-proposal";
 import { promoteStateToPersistentMemory } from "./memory-promotion";
 import { streamChat } from "./orchestrator";
-import { logActivity } from "@/lib/tasks/service";
+import { evaluateInferenceGate, type InferenceGateDecision } from "./inference-gate";
+import { inferenceCache } from "./inference-cache";
+import { efficiencyTracker } from "./efficiency";
+import { filterRelevantMemories, compressToolResult, estimateOutputBudget } from "./context-optimizer";
+import { analyzeFailure, selectRecoveryStrategy, strategyMemory } from "./recovery";
+import { verifyArithmeticResponse, verifyDocumentGrounding, verifyCodeSyntax } from "./verification";
 import type { AIMessage, AIStreamChunk, AgentEventType } from "@/types";
 
 export type ExecutionMode =
@@ -176,12 +181,119 @@ export async function* runUnifiedAgentTurn(
     }
   }
 
-  // 3. Mode Selection & Routing
+  // 3. Inference Gating & Routing
   const hasWeb = isFeatureEnabled("web_search");
+  const gate = evaluateInferenceGate(userText, {
+    hasActiveProject: Boolean(projectId),
+    hasWebAccess: hasWeb,
+  });
+
   const decision = determineExecutionMode(userText, {
     hasActiveProject: Boolean(projectId),
     hasWebAccess: hasWeb,
   });
+
+  // Direct identity/capability shortcut
+  if (gate.mode === "DETERMINISTIC" && gate.directResponse) {
+    yield {
+      kind: "agent_event",
+      eventType: "agent_started",
+      message: "Processing query via direct deterministic shortcut",
+    };
+    yield {
+      kind: "agent_event",
+      eventType: "routing",
+      message: `Direct shortcut: ${gate.reason}`,
+      metadata: { mode: "DIRECT", reason: gate.reason },
+    };
+    yield {
+      kind: "content_delta",
+      delta: gate.directResponse,
+    };
+    yield {
+      kind: "message_complete",
+      finishReason: "stop",
+      usage: {
+        inputTokens: Math.ceil(userText.length / 4),
+        outputTokens: Math.ceil(gate.directResponse.length / 4),
+      },
+    };
+    yield {
+      kind: "agent_event",
+      eventType: "agent_completed",
+      message: "Direct response completed",
+      metadata: { mode: "DIRECT" },
+    };
+    efficiencyTracker.recordRequest({ avoidedModel: true, isDeterministic: true });
+    return;
+  }
+
+  // Detect Coding Mode & Generation Profile
+  const isCodingMode = Boolean(
+    decision.intentResult.intent === "CODING" ||
+      decision.intentResult.intent === "DEBUGGING" ||
+      /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
+        userText,
+      ),
+  );
+
+  const profile = isCodingMode
+    ? "CODE"
+    : decision.mode === "TOOL" || decision.mode === "DIRECT"
+      ? "FAST"
+      : "BALANCED";
+
+  // Check Response Cache for identical safe requests
+  const isCacheable = inferenceCache.isCacheable(userText, {
+    requiresWeb: decision.intentResult.requiresWeb,
+    isAction: decision.mode === "WAITING_CONFIRMATION",
+  });
+
+  const cacheKey = userId
+    ? inferenceCache.generateKey({
+        userId,
+        projectId,
+        query: userText,
+        profile,
+      })
+    : null;
+
+  if (isCacheable && cacheKey && userId) {
+    const cachedResponse = inferenceCache.get(cacheKey, userId);
+    if (cachedResponse) {
+      yield {
+        kind: "agent_event",
+        eventType: "agent_started",
+        message: "Serving response from cache",
+      };
+      yield {
+        kind: "agent_event",
+        eventType: "routing",
+        message: "Cache hit: reusing verified local response",
+        metadata: { mode: decision.mode },
+      };
+      yield {
+        kind: "content_delta",
+        delta: cachedResponse,
+      };
+      yield {
+        kind: "message_complete",
+        finishReason: "stop",
+        usage: {
+          inputTokens: Math.ceil(userText.length / 4),
+          outputTokens: Math.ceil(cachedResponse.length / 4),
+        },
+      };
+      yield {
+        kind: "agent_event",
+        eventType: "agent_completed",
+        message: "Cached turn completed",
+        metadata: { mode: decision.mode },
+      };
+      efficiencyTracker.recordRequest({ avoidedModel: true, isCacheHit: true });
+      return;
+    }
+  }
 
   yield {
     kind: "agent_event",
@@ -323,7 +435,7 @@ export async function* runUnifiedAgentTurn(
           { maxIterations: 3, timeoutMs: 8000 },
         );
         if (summary.combinedFormattedOutput) {
-          toolResultsFormatted = summary.combinedFormattedOutput;
+          toolResultsFormatted = compressToolResult(summary.combinedFormattedOutput);
         }
       }
 
@@ -340,37 +452,175 @@ export async function* runUnifiedAgentTurn(
     });
   }
 
-  // 5. Detect Coding Mode
-  const isCodingMode = Boolean(
-    decision.intentResult.intent === "CODING" ||
-      decision.intentResult.intent === "DEBUGGING" ||
-      /\b(?:code|script|function|class|method|component|sql|regex|python|typescript|javascript|html|css|cpp|rust|golang|algorithm|bug|error|refactor)\b/i.test(
-        userText,
-      ),
-  );
+  // Filter memories to only relevant context
+  const filteredMemories = filterRelevantMemories(options.memories ?? [], userText, 3);
+  const outputBudget = estimateOutputBudget(userText, { isCodingMode });
 
-  // 6. Inference Stream
+  // 6. Inference Stream with Failure Analysis & Single Recovery Retry
   let assistantText = "";
-  for await (const chunk of streamChat({
-    messages: options.messages,
-    modelId: options.modelId,
-    signal: options.signal,
-    userPreferences: options.userPreferences,
-    projectInstructions: options.projectInstructions,
-    projectDocumentsContext: retrievedContext,
-    agentStateSummary,
-    toolResultsFormatted,
-    evidenceFormatted,
-    planSummary,
-    isCodingMode,
-    memories: options.memories,
-    maxContextTokens: options.maxContextTokens,
-  })) {
-    if (chunk.kind === "content_delta") {
-      assistantText += chunk.delta;
+  let executionSucceeded = false;
+
+  try {
+    for await (const chunk of streamChat({
+      messages: options.messages,
+      modelId: options.modelId,
+      signal: options.signal,
+      userPreferences: options.userPreferences,
+      projectInstructions: options.projectInstructions,
+      projectDocumentsContext: retrievedContext,
+      agentStateSummary,
+      toolResultsFormatted,
+      evidenceFormatted,
+      planSummary,
+      isCodingMode,
+      memories: filteredMemories,
+      maxContextTokens: options.maxContextTokens ?? outputBudget.maxTokens,
+      profile,
+    })) {
+      if (chunk.kind === "content_delta") {
+        assistantText += chunk.delta;
+      }
+      yield chunk;
     }
-    yield chunk;
+    executionSucceeded = true;
+  } catch (err) {
+    logger.warn("agent_orchestrator.inference_failed", {
+      mode: decision.mode,
+      error: err instanceof Error ? err.message : String(err),
+    });
+
+    const failure = analyzeFailure({
+      executionMode: decision.mode,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      modelCalled: true,
+      webResearchAttempted: decision.mode === "RESEARCH",
+      ragAttempted: decision.intentResult.intent === "DOCUMENT_QUERY",
+    });
+
+    if (failure.retryable) {
+      const strat = selectRecoveryStrategy(failure, {
+        currentMode: decision.mode,
+        userQuery: userText,
+        hasActiveProject: Boolean(projectId),
+        hasWebAccess: hasWeb,
+        isCodingMode,
+        attemptCount: 0,
+      });
+
+      if (strat) {
+        yield {
+          kind: "agent_event",
+          eventType: "recovery_started",
+          message: "Attempting bounded recovery strategy",
+          metadata: { failureCategory: failure.category, strategyId: strat.id },
+        };
+        yield {
+          kind: "agent_event",
+          eventType: "recovery_strategy_selected",
+          message: `Selected recovery strategy: ${strat.description}`,
+          metadata: { from: decision.mode, to: strat.targetMode, strategyId: strat.id },
+        };
+
+        const tRecStart = Date.now();
+        let recSuccess = false;
+        try {
+          if (toolResultsFormatted && strat.useDeterministicShortcut) {
+            yield {
+              kind: "content_delta",
+              delta: toolResultsFormatted,
+            };
+            assistantText = toolResultsFormatted;
+            recSuccess = true;
+          } else {
+            for await (const chunk of streamChat({
+              messages: options.messages.slice(-2),
+              modelId: options.modelId,
+              signal: options.signal,
+              userPreferences: options.userPreferences,
+              projectInstructions: options.projectInstructions,
+              projectDocumentsContext: retrievedContext,
+              agentStateSummary,
+              toolResultsFormatted,
+              evidenceFormatted,
+              planSummary,
+              isCodingMode,
+              memories: [],
+              maxContextTokens: strat.maxTokens,
+              profile: strat.fallbackProfile ?? "FAST",
+            })) {
+              if (chunk.kind === "content_delta") {
+                assistantText += chunk.delta;
+              }
+              yield chunk;
+            }
+            recSuccess = Boolean(assistantText.trim());
+          }
+
+          if (recSuccess) {
+            executionSucceeded = true;
+            yield {
+              kind: "agent_event",
+              eventType: "recovery_completed",
+              message: "Recovery succeeded",
+              metadata: { strategyId: strat.id },
+            };
+            efficiencyTracker.recordRecovery({
+              category: failure.category,
+              strategyId: strat.id,
+              success: true,
+              latencyMs: Date.now() - tRecStart,
+            });
+            strategyMemory.recordStrategy({
+              queryFingerprint: strategyMemory.generateFingerprint(userText),
+              category: decision.intentResult.intent,
+              successfulMode: strat.targetMode,
+              userId: userId ?? undefined,
+              projectId: projectId ?? undefined,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (recErr) {
+          yield {
+            kind: "agent_event",
+            eventType: "recovery_failed",
+            message: "Recovery strategy failed; terminating turn safely",
+            metadata: { error: recErr instanceof Error ? recErr.message : String(recErr) },
+          };
+          efficiencyTracker.recordRecovery({
+            category: failure.category,
+            strategyId: strat.id,
+            success: false,
+            latencyMs: Date.now() - tRecStart,
+          });
+          yield {
+            kind: "content_delta",
+            delta: "I encountered an issue processing your request and was unable to recover. Please try again or rephrase your query.",
+          };
+        }
+      }
+    } else {
+      yield {
+        kind: "agent_event",
+        eventType: "agent_failed",
+        message: `Execution failed: ${failure.reason}`,
+        metadata: { category: failure.category },
+      };
+      yield {
+        kind: "content_delta",
+        delta: `Execution stopped: ${failure.reason}`,
+      };
+    }
   }
+
+  // Cache successful responses for safe queries
+  if (executionSucceeded && isCacheable && cacheKey && userId && assistantText.trim()) {
+    inferenceCache.set(cacheKey, assistantText, { userId, projectId });
+  }
+
+  efficiencyTracker.recordRequest({
+    avoidedModel: false,
+    outputTokens: assistantText.length ? Math.ceil(assistantText.length / 4) : 0,
+  });
 
   // 7. Post-Turn State Synchronization & Checkpoint
   if (userId && activeAgentState) {
@@ -395,11 +645,40 @@ export async function* runUnifiedAgentTurn(
     }
   }
 
-  // 8. Lifecycle Event: Agent Completed
+  // 8. Self-Verification & Anti-Hallucination Guard for High-Risk Intents
+  if (executionSucceeded && assistantText.trim()) {
+    if (decision.intentResult.intent === "CALCULATION") {
+      const mathVer = verifyArithmeticResponse(userText, assistantText);
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: mathVer.verified ? "Arithmetic verification passed" : "Arithmetic verification flagged discrepancy",
+        metadata: { verified: mathVer.verified, score: mathVer.score },
+      };
+    } else if (decision.intentResult.intent === "DOCUMENT_QUERY" && retrievedContext) {
+      const docVer = verifyDocumentGrounding(retrievedContext, assistantText);
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: docVer.verified ? "Document grounding verified" : "Document grounding check flagged potential hallucination",
+        metadata: { verified: docVer.verified, score: docVer.score },
+      };
+    } else if (isCodingMode) {
+      const codeVer = verifyCodeSyntax(assistantText, "python");
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: codeVer.verified ? "Code syntax structure verified" : "Code syntax validation warning",
+        metadata: { verified: codeVer.verified, score: codeVer.score },
+      };
+    }
+  }
+
+  // 9. Lifecycle Event: Agent Completed
   yield {
     kind: "agent_event",
-    eventType: "agent_completed",
-    message: "Agent turn completed successfully",
-    metadata: { mode: decision.mode },
+    eventType: executionSucceeded ? "agent_completed" : "agent_failed",
+    message: executionSucceeded ? "Agent turn completed successfully" : "Agent turn ended with failure",
+    metadata: { mode: decision.mode, success: executionSucceeded },
   };
 }

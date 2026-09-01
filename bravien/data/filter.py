@@ -40,18 +40,19 @@ _ENGLISH_STOPWORDS = frozenset(
     well way even new want because any these give day most us is are was were""".split()
 )
 
+_HINGLISH_WORDS = frozenset(
+    """hai hoon kya kaise kyun karna karo batao bolo nahi haan accha theek hai
+    mujhe aapko tumko humara unka sabhi dhanyawad shukriya bhai dost madad
+    chahiye samajh gaya dekhna sochna batana karenge""".split()
+)
+
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 def detect_language(text: str, sample_chars: int = 4000) -> str:
     """Heuristic language identification.
 
-    Returns an ISO-639-1-style code, a script name, or "unknown".
-
-    This is a *heuristic*, not a trained classifier: it identifies non-Latin
-    scripts reliably, distinguishes English by stopword density, and labels
-    everything else "latin-other". It is not a substitute for fastText/CLD3 and
-    is documented as such rather than presented as language detection (§13).
+    Returns "en", "hi", "en-hi" (Hinglish), or other script/language codes.
     """
     if not text.strip():
         return "unknown"
@@ -91,8 +92,18 @@ def detect_language(text: str, sample_chars: int = 4000) -> str:
     words = [w.lower() for w in _WORD.findall(sample)]
     if not words:
         return "unknown"
-    hits = sum(1 for w in words if w in _ENGLISH_STOPWORDS)
-    return "en" if hits / len(words) > 0.08 else "latin-other"
+
+    en_hits = sum(1 for w in words if w in _ENGLISH_STOPWORDS)
+    hi_hits = sum(1 for w in words if w in _HINGLISH_WORDS)
+    total_w = len(words)
+
+    if hi_hits / total_w > 0.05 and en_hits / total_w > 0.03:
+        return "en-hi"
+    if hi_hits / total_w > 0.08:
+        return "hi"
+    if en_hits / total_w > 0.08:
+        return "en"
+    return "latin-other"
 
 
 # -------------------------------------------------------------------- PII
@@ -109,20 +120,34 @@ _PII_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("card", re.compile(r"\b(?:\d[ -]?){13,19}\b"), "<CARD>"),
 ]
 
+# Sensitive credentials & secrets patterns (actual values, not code references)
+_SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----")),
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{36,255}\b")),
+    ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[0-9a-zA-Z]{10,48}\b")),
+    (
+        "credential_assignment",
+        re.compile(r"""(?i)(?:api_key|auth_token|secret_key|client_secret|password|private_key)\s*[:=]\s*["'](?!(?:test|dummy|placeholder|your_key|<KEY>|none|null|undefined|example|mock|fake|sample|changeme|\$\w+|process\.env|\w+_key_here))([a-zA-Z0-9_\-\.]{24,})["']"""),
+    ),
+]
 
-def _luhn_valid(digits: str) -> bool:
-    """Luhn checksum, so ordinary long numbers are not mistaken for cards."""
-    nums = [int(c) for c in digits if c.isdigit()]
-    if not 13 <= len(nums) <= 19:
-        return False
-    total = 0
-    for i, n in enumerate(reversed(nums)):
-        if i % 2 == 1:
-            n *= 2
-            if n > 9:
-                n -= 9
-        total += n
-    return total % 10 == 0
+
+def contains_secrets(text: str) -> tuple[bool, str]:
+    """Detect actual leaked credentials, keys, and tokens.
+    
+    Distinguishes technical discussions and variable names from real secrets.
+    """
+    for name, pattern in _SECRET_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            # Special check for credential_assignment to avoid false positives on docstrings/placeholders
+            if name == "credential_assignment":
+                val = match.group(1).lower()
+                if len(val) < 20 or any(p in val for p in ("example", "placeholder", "your_secret", "dummy", "my_token")):
+                    continue
+            return True, name
+    return False, ""
 
 
 def redact_pii(text: str) -> tuple[str, dict[str, int]]:
@@ -307,3 +332,83 @@ def filter_document(
 
     st.kept += 1
     return doc
+
+
+def calculate_quality_score(
+    messages: Sequence[dict[str, str]] | list[Any],
+) -> tuple[float, list[str]]:
+    """Compute a quality score between 0.0 and 1.0 for a conversation example.
+    
+    Evaluates:
+    - Minimum substance and structure
+    - Turn alternation and completeness
+    - Formatting (punctuation, casing, code block closure)
+    - Absence of degenerate repetition
+    - Absence of secrets
+    """
+    reasons = []
+    if not messages:
+        return 0.0, ["empty_messages"]
+
+    # Role extraction
+    roles = [m.get("role") if isinstance(m, dict) else getattr(m, "role", "") for m in messages]
+    contents = [m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "") for m in messages]
+
+    # Rule 1: End with assistant turn
+    if roles[-1] != "assistant":
+        return 0.0, ["does_not_end_with_assistant"]
+
+    # Rule 2: At least one user turn
+    if "user" not in roles:
+        return 0.0, ["no_user_turn"]
+
+    score = 1.0
+
+    # Rule 3: Secret check
+    for c in contents:
+        has_secret, secret_name = contains_secrets(c)
+        if has_secret:
+            return 0.0, [f"contains_secret_{secret_name}"]
+
+    # Rule 4: Length & substance
+    user_len = sum(len(c) for r, c in zip(roles, contents) if r == "user")
+    asst_len = sum(len(c) for r, c in zip(roles, contents) if r == "assistant")
+
+    if user_len < 4:
+        score -= 0.3
+        reasons.append("very_short_user_prompt")
+    elif user_len > 8000:
+        score -= 0.1
+        reasons.append("very_long_user_prompt")
+
+    if asst_len < 6:
+        score -= 0.4
+        reasons.append("very_short_assistant_reply")
+    elif asst_len > 12000:
+        score -= 0.1
+        reasons.append("very_long_assistant_reply")
+
+    # Rule 5: Repetition check in assistant text
+    for r, c in zip(roles, contents):
+        if r == "assistant":
+            words = [w.lower() for w in _WORD.findall(c)]
+            if len(words) >= 10:
+                rep = repetition_ratio(words, 4)
+                if rep > 0.25:
+                    score -= 0.4
+                    reasons.append("high_repetition")
+                    break
+
+    # Rule 6: Code block balancing check
+    for c in contents:
+        if c.count("```") % 2 != 0:
+            score -= 0.2
+            reasons.append("unbalanced_code_blocks")
+
+    # Rule 7: Basic formatting
+    first_asst = next((c for r, c in zip(roles, contents) if r == "assistant"), "")
+    if first_asst and not (first_asst[0].isupper() or first_asst[0] in "`#*<[{\"-1234567890"):
+        score -= 0.05
+        reasons.append("informal_casing")
+
+    return max(0.0, min(1.0, score)), reasons

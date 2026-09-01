@@ -1,0 +1,66 @@
+{
+  "name": "bravien-training-dataset",
+  "version": "2.0.0",
+  "created_at": "2026-08-31T18:42:44.107819+00:00",
+  "pipeline_config": {
+    "train_ratio": 0.85,
+    "val_ratio": 0.075,
+    "test_ratio": 0.075,
+    "min_quality_score": 0.6,
+    "seed": 42
+  },
+  "statistics": {
+    "total_ingested": 68699,
+    "total_kept": 43996,
+    "train_samples": 37450,
+    "val_samples": 3245,
+    "test_samples": 3301,
+    "dropped": {
+      "empty": 4,
+      "invalid_schema": 0,
+      "secrets": 0,
+      "low_quality": 36,
+      "exact_duplicates": 24663,
+      "near_duplicates": 0
+    },
+    "category_distribution": {
+      "general_knowledge": 2,
+      "instruction_following": 8043,
+      "dialogue": 3549,
+      "reasoning": 3884,
+      "coding": 10754,
+      "safety_refusal": 3563,
+      "bravien_assistant": 3550,
+      "tool_use": 35,
+      "hinglish": 10612,
+      "reasoning_and_math": 4
+    },
+    "language_distribution": {
+      "en": 33361,
+      "latin-other": 24,
+      "en-hi": 10611
+    },
+    "quality_distribution": {
+      "100-110%": 39606,
+      "60-70%": 716,
+      "90-100%": 3674
+    }
+  },
+  "files": {
+    "train": {
+      "path": "data/processed/train.jsonl",
+      "count": 37450,
+      "sha256": "7c2c991ae2ed0ed10a9b7afefd5c53a33552a2181126d6b0cbe893b7ef20a8e3"
+    },
+    "val": {
+      "path": "data/processed/val.jsonl",
+      "count": 3245,
+      "sha256": "1f710f1ee2f06e73143e3222faa5243eb84399a7509304b4b28cc8fbaa89ef34"
+    },
+    "test": {
+      "path": "data/processed/test.jsonl",
+      "count": 3301,
+      "sha256": "85145e9cc8c87216741ffc78e83a116a741c87affa87de233550ed7197b69680"
+    }
+  }
+}

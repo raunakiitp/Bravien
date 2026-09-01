@@ -1,0 +1,81 @@
+# =====================================================================
+# Bravien 1.5B Native Model Pretraining Configuration
+# Optimized for high-throughput causal language modeling on constrained hardware
+# =====================================================================
+
+model:
+  name: "bravien-1.5b"
+  architecture: "decoder_only_causal_transformer"
+  vocab_size: 32000
+  hidden_size: 2048
+  num_layers: 32
+  num_heads: 16
+  num_kv_heads: 4             # 4:1 Grouped-Query Attention (GQA)
+  intermediate_size: 5632     # SwiGLU 2.75x hidden size
+  max_position_embeddings: 4096
+  position_encoding: "rope"
+  rope_theta: 10000.0
+  norm_kind: "rmsnorm"
+  norm_eps: 1.0e-5
+  activation: "silu"
+  tie_word_embeddings: true
+  initializer_range: 0.02
+  total_parameters: 1508509696 # ~1.509 Billion
+
+tokenizer:
+  type: "byte_level_bpe"
+  path: "tokenizers/bravien-native"
+  special_tokens:
+    pad_token_id: 0
+    unk_token_id: 1
+    bos_token_id: 2
+    eos_token_id: 3
+
+dataset:
+  manifest_path: "manifests/pretraining_manifest.json"
+  packed_data_dir: "data/packed_pretrain"
+  sequence_length: 2048
+  max_sequence_length: 4096
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+
+training:
+  optimizer: "AdamW"
+  learning_rate: 3.0e-4
+  min_learning_rate: 3.0e-5
+  warmup_steps: 2000
+  max_steps: 100000
+  weight_decay: 0.1
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_eps: 1.0e-8
+  max_grad_norm: 1.0
+  scheduler: "cosine_with_warmup"
+
+batching:
+  micro_batch_size: 1         # Sized for 6GB VRAM on local RTX 4050; scale to 4-8 on A100/H100
+  gradient_accumulation_steps: 32
+  effective_batch_size: 32
+  effective_tokens_per_step: 65536 # 32 * 2048
+
+hardware:
+  precision: "bf16"           # bfloat16 mixed precision
+  gradient_checkpointing: true # Required for 1.5B on 6GB VRAM
+  cpu_offload_optimizer: false
+  seed: 42
+
+checkpoints:
+  output_dir: "checkpoints/bravien-native-1.5b"
+  save_frequency_steps: 500
+  keep_last_n_checkpoints: 3
+  save_best_model: true
+
+evaluation:
+  eval_frequency_steps: 250
+  eval_steps: 50
+  benchmark_suite: "scripts/evaluate_native_bravien.py"
+
+logging:
+  log_frequency_steps: 10
+  report_path: "reports/bravien_native_1p5b_training.json"

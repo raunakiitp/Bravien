@@ -35,6 +35,11 @@ from bravien.training.sft import (
     resolve_base_checkpoint,
     run_sft,
 )
+from bravien.training.hf_trainer import (
+    HFTrainer,
+    HFTrainingConfig,
+    SFTDataset as HFSFTDataset,
+)
 from bravien.training.trainer import (
     StepMetrics,
     Trainer,
