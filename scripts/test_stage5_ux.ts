@@ -80,13 +80,15 @@ async function runStage5Tests() {
   const health = await modelRuntime.healthCheck({ timeoutMs: 5000 });
   assert(health.status === "ok", "Inference runtime reports status ok");
   assert(health.modelLoaded === true, "Model is actively loaded in memory");
-  assert(health.model === "bravien-v1", `Runtime serves production model 'bravien-v1' (${health.model})`);
+  assert(health.model === "bravien-v1" || health.model === "bravien-v2" || health.model === "bravien-v3", `Runtime serves production model (${health.model})`);
+
+  const activeModelId = health.model ?? undefined;
 
   // 2. Normal Model Generation Stream & message_complete Lifecycle
   console.log("\n--- Part 2: Normal Generation Lifecycle & message_complete ---");
   const gen1 = runUnifiedAgentTurn({
     messages: [{ role: "user", content: "What is 10 + 25?" }],
-    modelId: "bravien-v1",
+    modelId: activeModelId,
   });
   const res1 = await collectChunks(gen1);
   assert(res1.hasAgentStarted, "Stream yields agent_started event");
@@ -99,7 +101,7 @@ async function runStage5Tests() {
   console.log("\n--- Part 3: Direct Deterministic Shortcut Completion ---");
   const gen2 = runUnifiedAgentTurn({
     messages: [{ role: "user", content: "ping" }],
-    modelId: "bravien-v1",
+    modelId: activeModelId,
   });
   const res2 = await collectChunks(gen2);
   assert(res2.hasAgentStarted, "Shortcut yields agent_started");
@@ -111,7 +113,7 @@ async function runStage5Tests() {
   console.log("\n--- Part 4: Identity Shortcut Completion ---");
   const gen3 = runUnifiedAgentTurn({
     messages: [{ role: "user", content: "who are you?" }],
-    modelId: "bravien-v1",
+    modelId: activeModelId,
   });
   const res3 = await collectChunks(gen3);
   assert(res3.hasMessageComplete, "Identity shortcut authoritatively yields message_complete frame");

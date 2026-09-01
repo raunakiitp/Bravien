@@ -293,11 +293,11 @@ class BravienDataPipeline:
         seen_user_prompts: set[str] = set()
 
         for ex in deduped_examples:
-            # Enforce split isolation: no identical user prompts across splits
+            # Enforce split isolation: hash by user prompt fingerprint so identical prompts never split
             user_fp = ex.user_prompt_fingerprint()
 
             # Hash-based deterministic assignment
-            h = int(hashlib.sha256(f"{self.config.seed}:{ex.id}".encode()).hexdigest(), 16)
+            h = int(hashlib.sha256(f"{self.config.seed}:{user_fp}".encode()).hexdigest(), 16)
             unit_val = (h % 1000000) / 1000000.0
 
             if unit_val < self.config.train_ratio:

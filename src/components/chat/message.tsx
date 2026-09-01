@@ -326,23 +326,26 @@ function AssistantTurn({
         <TurnError error={message.error} onRetry={onRegenerate} />
       ) : (
         <>
-          {/* Agent Activity & Execution Events */}
+          {/* Phase 15: Agent Activity & Execution Events */}
           {message.agentEvents && message.agentEvents.length > 0 && (
             <div className="mb-3">
               {isStreaming ? (
-                <div className="inline-flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary animate-pulse">
-                  <span className="size-1.5 rounded-full bg-primary" />
+                <div className="inline-flex items-center gap-2 rounded-lg border border-brand/25 bg-brand/5 px-2.5 py-1 text-[11px] font-medium text-brand animate-pulse">
+                  <span className="size-1.5 rounded-full bg-brand" />
                   <span>{message.agentEvents[message.agentEvents.length - 1].message}</span>
                 </div>
               ) : (
-                <details className="group/events text-[11px] text-muted-foreground">
-                  <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-muted/50 font-mono text-[10px] transition-colors">
-                    <span className="text-emerald-500 font-bold">✓</span> Agent execution ({message.agentEvents.length} steps)
+                <details className="group/events rounded-md border border-border/50 bg-muted/20 px-2.5 py-1 text-[11px] text-muted-foreground transition-all">
+                  <summary className="cursor-pointer list-none flex items-center justify-between font-mono text-[11px] select-none">
+                    <span className="inline-flex items-center gap-1.5 font-medium text-foreground/80">
+                      <span className="text-emerald-500 font-bold">✓</span> Agent Activity ({message.agentEvents.length} completed)
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/60 group-open/events:rotate-180 transition-transform">▼</span>
                   </summary>
-                  <div className="mt-1.5 pl-3 border-l border-border/70 space-y-1 text-[11px] text-muted-foreground/80">
+                  <div className="mt-2 pl-2 border-l border-border/70 space-y-1 text-[11px] text-muted-foreground/80">
                     {message.agentEvents.map((ev, i) => (
                       <div key={i} className="flex items-center gap-1.5">
-                        <span className="text-muted-foreground/40 text-[9px]">•</span>
+                        <span className="text-emerald-500/80 text-[10px]">✓</span>
                         <span>{ev.message}</span>
                       </div>
                     ))}

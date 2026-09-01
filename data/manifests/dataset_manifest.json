@@ -1,7 +1,7 @@
 {
   "name": "bravien-training-dataset",
   "version": "2.0.0",
-  "created_at": "2026-08-31T10:28:47.643027+00:00",
+  "created_at": "2026-08-31T18:42:44.107819+00:00",
   "pipeline_config": {
     "train_ratio": 0.85,
     "val_ratio": 0.075,
@@ -10,56 +10,57 @@
     "seed": 42
   },
   "statistics": {
-    "total_ingested": 68701,
-    "total_kept": 51055,
-    "train_samples": 43311,
-    "val_samples": 3878,
-    "test_samples": 3866,
+    "total_ingested": 68699,
+    "total_kept": 43996,
+    "train_samples": 37450,
+    "val_samples": 3245,
+    "test_samples": 3301,
     "dropped": {
       "empty": 4,
       "invalid_schema": 0,
       "secrets": 0,
       "low_quality": 36,
-      "exact_duplicates": 17606,
+      "exact_duplicates": 24663,
       "near_duplicates": 0
     },
     "category_distribution": {
       "general_knowledge": 2,
-      "instruction_following": 9814,
-      "dialogue": 5308,
-      "reasoning": 3881,
-      "coding": 10758,
-      "safety_refusal": 5327,
-      "bravien_assistant": 5315,
-      "tool_use": 33,
-      "hinglish": 10617
+      "instruction_following": 8043,
+      "dialogue": 3549,
+      "reasoning": 3884,
+      "coding": 10754,
+      "safety_refusal": 3563,
+      "bravien_assistant": 3550,
+      "tool_use": 35,
+      "hinglish": 10612,
+      "reasoning_and_math": 4
     },
     "language_distribution": {
-      "en": 40415,
+      "en": 33361,
       "latin-other": 24,
-      "en-hi": 10616
+      "en-hi": 10611
     },
     "quality_distribution": {
-      "100-110%": 44900,
-      "60-70%": 711,
-      "90-100%": 5444
+      "100-110%": 39606,
+      "60-70%": 716,
+      "90-100%": 3674
     }
   },
   "files": {
     "train": {
       "path": "data/processed/train.jsonl",
-      "count": 43311,
-      "sha256": "9fef119a9292a1d6e949844c9850fdc9d6595520ca80f24af7aa9ea04769962b"
+      "count": 37450,
+      "sha256": "7c2c991ae2ed0ed10a9b7afefd5c53a33552a2181126d6b0cbe893b7ef20a8e3"
     },
     "val": {
       "path": "data/processed/val.jsonl",
-      "count": 3878,
-      "sha256": "42cb7262f4008059b25c0bbf830a1c182d110b38942af83dfb2a35602b9f397d"
+      "count": 3245,
+      "sha256": "1f710f1ee2f06e73143e3222faa5243eb84399a7509304b4b28cc8fbaa89ef34"
     },
     "test": {
       "path": "data/processed/test.jsonl",
-      "count": 3866,
-      "sha256": "76d59ba79c4b74e41f66f465c7267409033718f5bc46988108ba1c4fa77e7d55"
+      "count": 3301,
+      "sha256": "85145e9cc8c87216741ffc78e83a116a741c87affa87de233550ed7197b69680"
     }
   }
 }

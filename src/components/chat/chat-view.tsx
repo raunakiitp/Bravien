@@ -194,7 +194,7 @@ export function ChatView({
               {ready && model ? (
                 <>
                   <p className="mt-4 max-w-2xl text-[14px] leading-6 text-muted-foreground">
-                    Bravien-v1 ({formatParameters(model.parameters)} parameters) is active in {model.precision} on {model.device}. Weights, inference engine, context optimization, and tools run locally — zero data leaves this machine.
+                    {model.name ?? "Bravien-1.5B"} ({formatParameters(model.parameters)} parameters) is active in {model.precision} on {model.device}. Weights, inference engine, context optimization, and tools run locally — zero data leaves this machine.
                   </p>
 
                   <div className="mt-4 flex flex-wrap items-center gap-2">

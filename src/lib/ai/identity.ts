@@ -24,7 +24,7 @@ export const BRAVIEN_IDENTITY: BravienIdentityConfig = {
   version: "1.0.0",
   description: "A private, high-performance local AI workspace assistant.",
   tagline: "Private intelligence running on your hardware.",
-  defaultEngine: "bravien-v1",
+  defaultEngine: "Bravien-1.5B",
   author: "Bravien Project",
   capabilities: [
     "Conversational reasoning & instruction following",

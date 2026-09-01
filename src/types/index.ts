@@ -39,16 +39,24 @@ export interface AIMessage {
 }
 
 export type AgentEventType =
+  | "request_started"
   | "agent_started"
   | "routing"
+  | "intent_detected"
   | "memory_loaded"
+  | "memory_retrieved"
+  | "memory_saved"
   | "state_loaded"
   | "planning"
+  | "planning_started"
   | "plan_created"
   | "step_started"
+  | "tool_selected"
   | "tool_started"
   | "tool_completed"
   | "research_started"
+  | "retrieval_started"
+  | "retrieval_completed"
   | "source_found"
   | "evidence_added"
   | "checkpoint_saved"
@@ -59,6 +67,11 @@ export type AgentEventType =
   | "recovery_strategy_selected"
   | "recovery_completed"
   | "recovery_failed"
+  | "correction_started"
+  | "correction_completed"
+  | "verification_started"
+  | "verification_completed"
+  | "response_started"
   | "agent_completed"
   | "agent_failed";
 

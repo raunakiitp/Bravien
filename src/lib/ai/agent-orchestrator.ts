@@ -30,6 +30,7 @@ import { inferenceCache } from "./inference-cache";
 import { efficiencyTracker } from "./efficiency";
 import { filterRelevantMemories, compressToolResult, estimateOutputBudget } from "./context-optimizer";
 import { analyzeFailure, selectRecoveryStrategy, strategyMemory } from "./recovery";
+import { verifyArithmeticResponse, verifyDocumentGrounding, verifyCodeSyntax } from "./verification";
 import type { AIMessage, AIStreamChunk, AgentEventType } from "@/types";
 
 export type ExecutionMode =
@@ -644,7 +645,36 @@ export async function* runUnifiedAgentTurn(
     }
   }
 
-  // 8. Lifecycle Event: Agent Completed
+  // 8. Self-Verification & Anti-Hallucination Guard for High-Risk Intents
+  if (executionSucceeded && assistantText.trim()) {
+    if (decision.intentResult.intent === "CALCULATION") {
+      const mathVer = verifyArithmeticResponse(userText, assistantText);
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: mathVer.verified ? "Arithmetic verification passed" : "Arithmetic verification flagged discrepancy",
+        metadata: { verified: mathVer.verified, score: mathVer.score },
+      };
+    } else if (decision.intentResult.intent === "DOCUMENT_QUERY" && retrievedContext) {
+      const docVer = verifyDocumentGrounding(retrievedContext, assistantText);
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: docVer.verified ? "Document grounding verified" : "Document grounding check flagged potential hallucination",
+        metadata: { verified: docVer.verified, score: docVer.score },
+      };
+    } else if (isCodingMode) {
+      const codeVer = verifyCodeSyntax(assistantText, "python");
+      yield {
+        kind: "agent_event",
+        eventType: "verification_completed",
+        message: codeVer.verified ? "Code syntax structure verified" : "Code syntax validation warning",
+        metadata: { verified: codeVer.verified, score: codeVer.score },
+      };
+    }
+  }
+
+  // 9. Lifecycle Event: Agent Completed
   yield {
     kind: "agent_event",
     eventType: executionSucceeded ? "agent_completed" : "agent_failed",

@@ -1,0 +1,10 @@
+{
+  "manifest_version": "1.0.0",
+  "created_at": "2026-08-31T19:43:39Z",
+  "total_estimated_tokens": 0,
+  "total_samples": 0,
+  "sources": [],
+  "metadata": {
+    "generator": "scripts/build_pretraining_manifest.py"
+  }
+}
