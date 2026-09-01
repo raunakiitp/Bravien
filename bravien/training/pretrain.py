@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from bravien.model.bravien_config import BravienConfig
 from bravien.model.bravien_model import BravienForCausalLM
+from bravien.model.parameter_count import count_parameters
 from bravien.training.checkpoint_manager import CheckpointManager, TrainingState
 from bravien.training.pretrain_config import PretrainConfig
 
@@ -162,8 +163,8 @@ class BravienPretrainer:
         print("\n" + "=" * 65)
         print(f"BRAVIEN PRETRAINING: {self.model.config.name}")
         print("=" * 65)
-        param_report = self.model.count_parameters()
-        print(f"Target Architecture:    {self.model.config.name} ({param_report.total_millions:.2f}M params)")
+        param_report = count_parameters(self.model)
+        print(f"Target Architecture:    {self.model.config.name} ({param_report['total_millions']:.2f}M params)")
         print(f"Device:                 {self.device} ({torch.cuda.get_device_name(0) if self.device.type == 'cuda' else 'CPU'})")
         print(f"Mixed Precision:        {self.config.mixed_precision} (AMP: {self.use_amp})")
         print(f"Effective Batch Size:   {self.config.effective_batch_size} (micro: {self.config.micro_batch_size}, accum: {self.config.gradient_accumulation_steps})")
