@@ -174,18 +174,28 @@ class BravienPretrainer:
         print("=" * 65 + "\n")
 
         self.model.train()
-        step = 0
+        step = self.config.initial_step
         epoch = 0
-        total_tokens = 0
+        total_tokens = self.config.initial_tokens
         running_loss = 0.0
         best_val_loss = float("inf")
         start_time = time.perf_counter()
         last_log_time = start_time
         tokens_since_log = 0
+        last_saved_path: Path | None = None
+        avg_loss = 0.0
 
         train_iter = iter(train_loader)
 
-        while step < self.config.max_steps and not self.interrupted:
+        target_max_steps = self.config.max_steps
+        if self.config.initial_step > 0 and self.config.max_steps <= self.config.initial_step:
+            target_max_steps = self.config.initial_step + self.config.max_steps
+
+        while step < target_max_steps and not self.interrupted:
+            if self.config.max_tokens is not None and total_tokens >= self.config.max_tokens:
+                print(f"\n[TOKEN BUDGET REACHED] Reached requested token budget of {self.config.max_tokens:,} tokens (processed {total_tokens:,}). Stopping cleanly.")
+                break
+
             self.optimizer.zero_grad(set_to_none=True)
             accum_loss = 0.0
 
@@ -235,11 +245,11 @@ class BravienPretrainer:
             running_loss += accum_loss
 
             # Periodic logging
-            if step % self.config.log_interval == 0 or step == 1:
+            if step % self.config.log_interval == 0 or step == self.config.initial_step + 1:
                 now = time.perf_counter()
                 elapsed_since_log = now - last_log_time
                 tps = tokens_since_log / elapsed_since_log if elapsed_since_log > 0 else 0
-                avg_loss = running_loss / (self.config.log_interval if step > 1 else 1)
+                avg_loss = running_loss / (self.config.log_interval if step > self.config.initial_step + 1 else 1)
                 lr = self.scheduler.get_last_lr()[0]
 
                 vram_str = ""
@@ -248,7 +258,7 @@ class BravienPretrainer:
                     vram_str = f" | VRAM: {vram_mb:.0f}MB"
 
                 print(
-                    f"Step {step:05d}/{self.config.max_steps:05d} | "
+                    f"Step {step:05d}/{target_max_steps:05d} | "
                     f"Loss: {avg_loss:.4f} | "
                     f"LR: {lr:.2e} | "
                     f"GradNorm: {grad_norm:.2f} | "
@@ -260,7 +270,7 @@ class BravienPretrainer:
                 last_log_time = now
 
             # Periodic checkpoint saving
-            if step % self.config.save_interval == 0 or step == self.config.max_steps:
+            if step % self.config.save_interval == 0 or step == target_max_steps:
                 state = TrainingState(
                     step=step,
                     epoch=epoch,
@@ -268,19 +278,27 @@ class BravienPretrainer:
                     total_tokens_trained=total_tokens,
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
-                saved_path = self.checkpoint_manager.save_checkpoint(
+                last_saved_path = self.checkpoint_manager.save_checkpoint(
                     model=self.model,
                     optimizer=self.optimizer,
                     scheduler=self.scheduler,
                     state=state,
                 )
-                print(f"  [CHECKPOINT] Saved checkpoint at step {step} -> {saved_path}")
+                print(f"  [CHECKPOINT] Saved checkpoint at step {step} -> {last_saved_path}")
 
-        total_time = time.perf_counter() - start_time
+        total_time = max(time.perf_counter() - start_time, 1e-6)
+        peak_vram_mb = (torch.cuda.max_memory_allocated() / (1024 * 1024)) if self.device.type == "cuda" else 0.0
+        overall_tps = (total_tokens - self.config.initial_tokens) / total_time
+
         print(f"\nPretraining finished in {total_time:.2f}s! Total Tokens Processed: {total_tokens:,}")
         return {
             "final_step": step,
             "total_tokens": total_tokens,
+            "tokens_trained_in_session": total_tokens - self.config.initial_tokens,
             "elapsed_seconds": total_time,
             "final_loss": accum_loss,
+            "average_recent_loss": avg_loss or accum_loss,
+            "tokens_per_second": overall_tps,
+            "peak_gpu_memory_mb": peak_vram_mb,
+            "last_checkpoint_path": str(last_saved_path) if last_saved_path else None,
         }

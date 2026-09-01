@@ -17,6 +17,9 @@ class PretrainConfig:
     min_learning_rate: float = 3e-5
     warmup_steps: int = 100
     max_steps: int = 1000
+    max_tokens: int | None = None
+    initial_step: int = 0
+    initial_tokens: int = 0
     weight_decay: float = 0.1
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95

@@ -4,9 +4,9 @@ Handles:
 - Zero Pretrained Weight Contamination (pure native Bravien initialization)
 - Pre-flight Data Validation (token bounds [0, 32000), sequence length alignment)
 - Automatic Resume Detection (picks up latest valid checkpoint if present)
-- Cheap Real-Data Pilot (--max-steps / --max-tokens)
+- Step & Token Bounded Pilot (--max-steps / --max-tokens)
 - Graceful Interruption & OOM Safety
-- Lightweight Live Telemetry (step, tokens, loss, lr, tok/s, GPU VRAM)
+- Rich Structured Telemetry (JSON report + console summary)
 """
 
 from __future__ import annotations
@@ -155,6 +155,12 @@ def main() -> None:
         action="store_true",
         help="Force clean initialization even if existing checkpoints exist.",
     )
+    parser.add_argument(
+        "--report-file",
+        type=str,
+        default="reports/pilot_telemetry.json",
+        help="Path to save machine-readable telemetry JSON.",
+    )
 
     args = parser.parse_args()
 
@@ -170,7 +176,7 @@ def main() -> None:
     batch_sec = config_dict.get("batching", {})
     hardw_sec = config_dict.get("hardware", {})
     ckpt_sec = config_dict.get("checkpoints", {})
-    data_sec = config_dict.get("dataset", {})
+    tok_sec = config_dict.get("tokenizer", {})
 
     preset_name = args.preset or model_sec.get("name", "bravien-1.5b")
     out_dir = Path(args.output_dir or ckpt_sec.get("output_dir", "checkpoints/bravien-native-1.5b"))
@@ -179,6 +185,7 @@ def main() -> None:
     grad_accum = args.gradient_accumulation_steps or batch_sec.get("gradient_accumulation_steps", 32)
     lr = args.lr or train_sec.get("learning_rate", 3e-4)
     max_steps = args.max_steps or train_sec.get("max_steps", 100000)
+    max_tokens = args.max_tokens
     precision = args.mixed_precision or hardw_sec.get("precision", "bf16")
 
     print("\n" + "=" * 70)
@@ -195,7 +202,12 @@ def main() -> None:
 
     # 2. Checkpoint Discovery & Resume Policy
     latest_ckpt: Path | None = None
+    initial_step = 0
+    initial_tokens = 0
+    saved_opt_state = None
+    saved_sched_state = None
     ckpt_mgr = CheckpointManager(out_dir)
+
     if not args.force_new:
         latest_ckpt = ckpt_mgr.get_latest_checkpoint()
 
@@ -205,6 +217,21 @@ def main() -> None:
         print(f"\n[RESUME DETECTED] Found existing checkpoint -> {latest_ckpt}")
         print(f"Resuming training state directly from: {latest_ckpt.name}...")
         model = load_bravien_checkpoint(latest_ckpt, device=device, dtype="auto")
+
+        # Load training state dictionary if exists
+        train_state_file = latest_ckpt / "training_state.pt"
+        if train_state_file.exists():
+            try:
+                state_bundle = torch.load(train_state_file, map_location="cpu", weights_only=False)
+                t_state = state_bundle.get("training_state", {})
+                initial_step = t_state.get("step", 0)
+                initial_tokens = t_state.get("total_tokens_trained", 0)
+                saved_opt_state = state_bundle.get("optimizer_state_dict")
+                saved_sched_state = state_bundle.get("scheduler_state_dict")
+                print(f"  * Restored Global Step:     {initial_step}")
+                print(f"  * Restored Tokens Trained:  {initial_tokens:,}")
+            except Exception as e:
+                print(f"  ⚠️ Could not read training_state.pt: {e}")
     else:
         print(f"\n[NEW TRAINING] Initializing fresh native model architecture: '{preset_name}'...")
         model_config = get_bravien_preset(preset_name)
@@ -218,12 +245,17 @@ def main() -> None:
     print(f"  * Device:             {device} ({torch.cuda.get_device_name(0) if device == 'cuda' else 'CPU'})")
     print(f"  * Precision:          {precision}")
     print(f"  * Micro Batch Size:   {micro_bs} (Grad Accum: {grad_accum}, Effective Batch: {micro_bs * grad_accum})")
-    print(f"  * Checkpoint Target:  {out_dir}")
+    print(f"  * Target Output Dir:  {out_dir}")
+    if max_tokens:
+        print(f"  * Token Budget Limit: {max_tokens:,} tokens")
 
     # 4. Prepare PretrainConfig
     pretrain_cfg = PretrainConfig(
         learning_rate=lr,
         max_steps=max_steps,
+        max_tokens=max_tokens,
+        initial_step=initial_step,
+        initial_tokens=initial_tokens,
         micro_batch_size=micro_bs,
         gradient_accumulation_steps=grad_accum,
         mixed_precision=precision,
@@ -239,21 +271,83 @@ def main() -> None:
         train_dataset=dataset,
     )
 
+    # Restore optimizer and scheduler states if resuming
+    if saved_opt_state is not None:
+        try:
+            pretrainer.optimizer.load_state_dict(saved_opt_state)
+            print("  ✅ Restored AdamW momentum buffers")
+        except Exception as e:
+            print(f"  ⚠️ Could not restore optimizer momentum: {e}")
+
+    if saved_sched_state is not None:
+        try:
+            pretrainer.scheduler.load_state_dict(saved_sched_state)
+            print("  ✅ Restored Cosine LR schedule state")
+        except Exception as e:
+            print(f"  ⚠️ Could not restore scheduler state: {e}")
+
     try:
         result = pretrainer.train()
+
+        # Build comprehensive telemetry dictionary
+        tok_path = Path(tok_sec.get("path", "tokenizers/bravien-native"))
+        vocab_size = 30701
+        if tok_path.exists():
+            try:
+                vocab_size = BravienTokenizer.from_pretrained(tok_path).vocab_size
+            except Exception:
+                pass
+
+        telemetry = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "model_name": preset_name,
+            "parameter_count": param_stats["total_parameters"],
+            "parameter_count_millions": param_stats["total_millions"],
+            "parameter_count_billions": param_stats["total_billions"],
+            "tokenizer_vocabulary": vocab_size,
+            "sequence_length": dataset.max_seq_len if dataset else 2048,
+            "total_training_steps": result["final_step"],
+            "total_tokens_processed": result["total_tokens"],
+            "tokens_in_session": result["tokens_trained_in_session"],
+            "final_loss": round(result["final_loss"], 4),
+            "average_recent_loss": round(result["average_recent_loss"], 4),
+            "tokens_per_second": round(result["tokens_per_second"], 1),
+            "peak_gpu_memory_mb": round(result["peak_gpu_memory_mb"], 1),
+            "checkpoint_path": result["last_checkpoint_path"] or str(latest_ckpt or out_dir),
+            "resumed_from_checkpoint": latest_ckpt is not None,
+            "training_duration_seconds": round(result["elapsed_seconds"], 2),
+            "detected_gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "cuda_version": torch.version.cuda if torch.cuda.is_available() else "N/A",
+            "pytorch_version": torch.__version__,
+            "status": "COMPLETED",
+        }
+
         print("\n" + "=" * 70)
-        print(f"PRETRAINING EXECUTION COMPLETE")
-        print(f"  - Final Step:     {result['final_step']}")
-        print(f"  - Total Tokens:   {result['total_tokens']:,}")
-        print(f"  - Duration:       {result['elapsed_seconds']:.2f}s")
-        print(f"  - Final Loss:     {result['final_loss']:.4f}")
+        print("PILOT / PRETRAINING TELEMETRY SUMMARY")
+        print("=" * 70)
+        print(f"  - Model:              {telemetry['model_name']} ({telemetry['parameter_count_millions']:.2f}M params)")
+        print(f"  - Total Steps:        {telemetry['total_training_steps']}")
+        print(f"  - Total Tokens:       {telemetry['total_tokens_processed']:,} ({telemetry['tokens_in_session']:,} in this session)")
+        print(f"  - Final Loss:         {telemetry['final_loss']:.4f} (Recent Avg: {telemetry['average_recent_loss']:.4f})")
+        print(f"  - Throughput:         {telemetry['tokens_per_second']:,.1f} tok/s")
+        print(f"  - Duration:           {telemetry['training_duration_seconds']:.2f}s")
+        print(f"  - Peak GPU VRAM:      {telemetry['peak_gpu_memory_mb']:.1f} MB")
+        print(f"  - Checkpoint Saved:   {telemetry['checkpoint_path']}")
+        print(f"  - Auto-Resume Tested: {telemetry['resumed_from_checkpoint']}")
         print("=" * 70 + "\n")
+
+        report_p = Path(args.report_file)
+        report_p.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_p, "w", encoding="utf-8") as f:
+            json.dump(telemetry, f, indent=2)
+        print(f"Machine-readable telemetry saved to: {report_p}")
+
     except torch.cuda.OutOfMemoryError:
         print("\n❌ CUDA Out-of-Memory Error encountered!")
         print("Suggestion: Decrease --micro-batch-size or enable activation gradient checkpointing in config.")
         sys.exit(2)
     except KeyboardInterrupt:
-        print("\n⚠️ Training halted by user interruption.")
+        print("\n⚠️ Training halted by user interruption. Latest valid checkpoint preserved.")
 
 
 if __name__ == "__main__":
